@@ -1,0 +1,237 @@
+"""
+generator.py — Genera PPTX usando las plantillas REALES de Periferia IT.
+Estrategia: unpack → quitar slides no deseados → editar texto → repack
+"""
+import re, shutil, json, tempfile, subprocess
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+SCRIPTS  = Path("/home/claude/scripts")
+FDA_TPL  = Path("/mnt/user-data/uploads/FUERA_DEL_ALCANCE.pptx")
+PERF_TPL = Path("/mnt/user-data/uploads/PERFILES_POR_TORRE__1_.pptx")
+
+# ── Mapeo slide number → torre (1-indexed) ──────────────────────────────────
+FDA_SLIDE = {
+    "FULLSTACK / DESARROLLO": 4, "QA": 5, "ARQUITECTURA": 6, "DATOS": 7,
+    "RPA": 8, "DEVOPS": 9, "CIBERSEGURIDAD": 10, "IA": 11,
+    "SAP": 12, "PMO": 13, "MOBILE": 14, "PORTALES": 15, "INTEGRACIÓN": 16,
+}
+FDA_FIXED  = [1, 2, 3, 17]   # portada, roadmap, general, cierre
+
+PERF_SLIDES = {
+    "FULLSTACK / DESARROLLO": [3,4,5,6,7,8],
+    "QA":            [9],
+    "ARQUITECTURA":  [10],
+    "DATOS":         [11,12],
+    "RPA":           [13,14,15],
+    "DEVOPS":        [16,17,18],
+    "CIBERSEGURIDAD":[19],
+    "IA":            [20],
+    "SAP":           [21,22,23,24,25],
+    "PMO":           [26],
+    "MOBILE":        [27],
+    "PORTALES":      [28],
+    "INTEGRACIÓN":   [29,30],
+}
+PERF_FIXED = [1, 2, 31]     # portada, roadmap, cierre
+
+# Normalización de nombres (el frontend puede mandar variantes)
+NORM = {n.upper():n for n in FDA_SLIDE}
+NORM.update({"FULLSTACK":"FULLSTACK / DESARROLLO","INTEGRACION":"INTEGRACIÓN"})
+
+
+def _run(cmd):
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd="/home/claude")
+    if r.returncode != 0:
+        raise RuntimeError(cmd + "\n" + r.stderr[-600:])
+    return r.stdout
+
+
+def _unpack(src: Path, dst: Path):
+    if dst.exists(): shutil.rmtree(dst)
+    _run(f"python3 {SCRIPTS}/office/unpack.py '{src}' '{dst}'")
+
+
+def _repack(src: Path, out: Path, tpl: Path):
+    _run(f"python3 {SCRIPTS}/clean.py '{src}'")
+    _run(f"python3 {SCRIPTS}/office/pack.py '{src}' '{out}' --original '{tpl}'")
+
+
+def _keep_slides(unpacked: Path, keep: list):
+    """
+    Conserva solo los slides con numero de archivo slideN.xml donde N in keep.
+    Usa regex para no corromper los namespace prefixes del XML.
+    """
+    prs_path  = unpacked / "ppt" / "presentation.xml"
+    rels_path = unpacked / "ppt" / "_rels" / "presentation.xml.rels"
+
+    # slide file number → rId  (desde el archivo .rels)
+    rels_txt   = rels_path.read_text("utf-8")
+    sn2rid = {}
+    for rid, target in re.findall(r'<Relationship[^>]+Id="(rId[0-9]+)"[^>]+Target="(slides/slide[0-9]+[.]xml)"[^>]*/?>',  rels_txt):
+        m = re.search(r'slide(\d+)\.xml', target)
+        if m: sn2rid[int(m.group(1))] = rid
+
+    keep_rids = {sn2rid[sn] for sn in keep if sn in sn2rid}
+
+    # Elimina los <p:sldId> cuyo rId no está en keep_rids
+    prs_txt = prs_path.read_text("utf-8")
+    def _replacer(m):
+        tag = m.group(0)
+        rid_m = re.search(r'(?:r:|ns\d+:)id="(rId\d+)"', tag)
+        if rid_m and rid_m.group(1) not in keep_rids:
+            return ""
+        return tag
+    prs_path.write_text(re.sub(r'<[^>]*:sldId[^>]*/>', _replacer, prs_txt), "utf-8")
+
+
+# ── Helpers de edición XML ───────────────────────────────────────────────────
+
+def _item_para(text: str) -> str:
+    """Genera un <a:p> con bullet '-' idéntico al del template."""
+    t = text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+    return f'''<a:p>
+              <a:pPr marL="171450" indent="-171450" algn="just">
+                <a:buFont typeface="Calibri"/>
+                <a:buChar char="-"/>
+              </a:pPr>
+              <a:r>
+                <a:rPr lang="es-ES" sz="1200" dirty="0">
+                  <a:solidFill><a:srgbClr val="333333"/></a:solidFill>
+                  <a:ea typeface="+mn-lt"/>
+                  <a:cs typeface="+mn-lt"/>
+                </a:rPr>
+                <a:t>{t}</a:t>
+              </a:r>
+            </a:p>'''
+
+
+def _replace_body_items(xml: str, body_idx: int, items: list) -> str:
+    """Reemplaza los <a:p> del txBody[body_idx] con párrafos de items."""
+    bodies = list(re.finditer(r"(<p:txBody>)(.*?)(</p:txBody>)", xml, re.DOTALL))
+    if body_idx >= len(bodies):
+        return xml
+    m = bodies[body_idx]
+    bp = re.search(r"<a:bodyPr[^/]*/?>|<a:bodyPr.*?</a:bodyPr>", m.group(2), re.DOTALL)
+    bp_xml = bp.group(0) if bp else "<a:bodyPr/>"
+    paras  = "\n            ".join(_item_para(it) for it in items) if items else ""
+    inner  = f"\n            {bp_xml}\n            <a:lstStyle/>\n            {paras}\n          "
+    return xml[:m.start()] + m.group(1) + inner + m.group(3) + xml[m.end():]
+
+
+def _replace_body_text(xml: str, body_idx: int, new_text: str) -> str:
+    """Reemplaza el primer <a:t> en el txBody[body_idx]."""
+    bodies = list(re.finditer(r"(<p:txBody>)(.*?)(</p:txBody>)", xml, re.DOTALL))
+    if body_idx >= len(bodies):
+        return xml
+    m   = bodies[body_idx]
+    t   = new_text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+    new_inner = re.sub(r"<a:t>[^<]*</a:t>", f"<a:t>{t}</a:t>", m.group(2), count=1)
+    return xml[:m.start()] + m.group(1) + new_inner + m.group(3) + xml[m.end():]
+
+
+# ── Editores por tipo ────────────────────────────────────────────────────────
+
+def _edit_fda(slide_path: Path, items: list):
+    """Rellena las 4 cajas de items de un slide FDA."""
+    if not items:
+        return
+    xml  = slide_path.read_text("utf-8")
+    N    = 4            # 4 boxes en el template
+    size = max(1, -(-len(items)//N))   # ceil division
+    boxes = [items[i:i+size] for i in range(0,len(items),size)]
+    while len(boxes) < N: boxes.append([])
+    for bi in range(N):
+        xml = _replace_body_items(xml, bi+1, boxes[bi])
+    slide_path.write_text(xml, "utf-8")
+
+
+def _edit_perf(slide_path: Path, profiles: list):
+    """Edita roles/descripciones en un slide de perfiles (hasta 4 perfiles)."""
+    if not profiles:
+        return
+    xml  = slide_path.read_text("utf-8")
+    ROL  = [2, 8, 12, 16]
+    DESC = [4, 10, 14, 18]
+    for i, p in enumerate(profiles[:4]):
+        if p.get("rol"):
+            xml = _replace_body_text(xml, ROL[i],  p["rol"].upper())
+        if p.get("desc"):
+            xml = _replace_body_text(xml, DESC[i], p["desc"])
+    slide_path.write_text(xml, "utf-8")
+
+
+# ── Entry point ──────────────────────────────────────────────────────────────
+
+def generate(config: dict, out_dir: str) -> dict:
+    """
+    config = {
+      "mode": "fda" | "perfiles" | "ambos",
+      "torres": [
+        {
+          "name": "QA",
+          "fda_items": ["..."],   # lista vacía = usar template original
+          "perfiles":  [{"rol":"...","desc":"..."}]  # lista vacía = usar template
+        }
+      ]
+    }
+    Retorna {"fda": "/ruta/fda.pptx", "perfiles": "/ruta/perf.pptx"}
+    """
+    mode    = config.get("mode","ambos")
+    torres  = config.get("torres",[])
+    do_fda  = mode in ("fda","ambos")
+    do_perf = mode in ("perfiles","ambos")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result  = {}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+
+        # ── FDA ──────────────────────────────────────────────────────────────
+        if do_fda:
+            work = tmp / "fda"
+            _unpack(FDA_TPL, work)
+            keep = list(FDA_FIXED)
+            for tc in torres:
+                name = NORM.get(tc["name"].upper(), tc["name"])
+                sn   = FDA_SLIDE.get(name)
+                if not sn: continue
+                keep.append(sn)
+                items = tc.get("fda_items") or []
+                if items:
+                    _edit_fda(work/"ppt"/"slides"/f"slide{sn}.xml", items)
+            _keep_slides(work, sorted(set(keep)))
+            out = out_dir / "Periferia_IT_Fuera_del_Alcance.pptx"
+            _repack(work, out, FDA_TPL)
+            result["fda"] = str(out)
+
+        # ── Perfiles ─────────────────────────────────────────────────────────
+        if do_perf:
+            work = tmp / "perf"
+            _unpack(PERF_TPL, work)
+            keep = list(PERF_FIXED)
+            for tc in torres:
+                name = NORM.get(tc["name"].upper(), tc["name"])
+                sns  = PERF_SLIDES.get(name, [])
+                keep.extend(sns)
+                profiles = tc.get("perfiles") or []
+                if profiles:
+                    PPS = 4  # profiles per slide
+                    for si, sn in enumerate(sns):
+                        chunk = profiles[si*PPS:(si+1)*PPS]
+                        if chunk:
+                            _edit_perf(work/"ppt"/"slides"/f"slide{sn}.xml", chunk)
+            _keep_slides(work, sorted(set(keep)))
+            out = out_dir / "Periferia_IT_Perfiles.pptx"
+            _repack(work, out, PERF_TPL)
+            result["perfiles"] = str(out)
+
+    return result
+
+
+if __name__ == "__main__":
+    import sys
+    cfg = json.loads(sys.argv[1]) if len(sys.argv)>1 else {}
+    out = sys.argv[2] if len(sys.argv)>2 else "/tmp/out"
+    print(json.dumps(generate(cfg, out)))

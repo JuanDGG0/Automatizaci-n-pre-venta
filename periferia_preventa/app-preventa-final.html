@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Periferia — Generador de Propuestas</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --g: #00E676;
+    --gd: #00C853;
+    --bg: #080F09;
+    --bg2: #0D180F;
+    --card: #0F1C11;
+    --card2: #111f13;
+    --border: #172B1A;
+    --border2: #1f3a22;
+    --text: #C8E6C9;
+    --muted: #4A7A4E;
+    --white: #F1FFF3;
+    --danger: #ff5252;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    opacity: .6;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Header */
+  .header {
+    background: rgba(8,15,9,0.92);
+    backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 40px;
+    height: 62px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo { display: flex; align-items: center; gap: 12px; }
+
+  .logo-mark {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #00C853, #1B5E20);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 15px;
+    color: #fff;
+    box-shadow: 0 4px 20px rgba(0,200,83,.3);
+  }
+
+  .logo-name {
+    font-family: 'Syne', sans-serif;
+    font-size: 16px;
+    font-weight: 800;
+    color: var(--white);
+    letter-spacing: -.3px;
+  }
+
+  .logo-sub {
+    font-size: 10px;
+    color: var(--muted);
+    font-weight: 400;
+    letter-spacing: .04em;
+  }
+
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    color: var(--muted);
+    padding: 5px 14px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+  }
+
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border2); transition: background .3s; }
+  .status-dot.ok { background: var(--g); box-shadow: 0 0 6px var(--g); }
+  .status-dot.err { background: var(--danger); }
+
+  /* Layout */
+  .layout {
+    position: relative;
+    z-index: 1;
+    max-width: 1020px;
+    margin: 0 auto;
+    padding: 32px 24px 120px;
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 20px;
+  }
+
+  /* Sections */
+  .section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+
+  .section-head {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .section-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: var(--muted);
+  }
+
+  .section-body { padding: 20px; }
+
+  /* Mode tabs */
+  .mode-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .mode-tab {
+    padding: 14px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    text-align: center;
+    transition: all .15s;
+    background: var(--bg2);
+    user-select: none;
+  }
+
+  .mode-tab:hover { border-color: var(--muted); background: var(--card2); }
+
+  .mode-tab.active {
+    border-color: var(--g);
+    background: rgba(0,230,118,.06);
+  }
+
+  .mode-tab-icon { font-size: 20px; margin-bottom: 6px; }
+  .mode-tab-label { font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700; color: var(--white); }
+  .mode-tab-desc { font-size: 10px; color: var(--muted); margin-top: 3px; }
+
+  /* Torres grid */
+  .torres-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 7px;
+  }
+
+  .torre-chip {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 10px 13px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    cursor: pointer;
+    transition: all .12s;
+    background: var(--bg2);
+    user-select: none;
+  }
+
+  .torre-chip:hover { border-color: var(--muted); background: var(--card2); }
+
+  .torre-chip.selected {
+    border-color: rgba(0,230,118,.5);
+    background: rgba(0,230,118,.05);
+  }
+
+  .torre-check {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1.5px solid var(--border2);
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    transition: all .12s;
+  }
+
+  .torre-chip.selected .torre-check {
+    background: var(--g);
+    border-color: var(--g);
+  }
+
+  .torre-check-inner {
+    width: 8px;
+    height: 8px;
+    background: #000;
+    clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0, 43% 62%);
+    display: none;
+  }
+
+  .torre-chip.selected .torre-check-inner { display: block; }
+  .torre-name { font-size: 12px; font-weight: 500; color: var(--text); }
+
+  /* Detail cards */
+  .torres-detail { display: flex; flex-direction: column; gap: 8px; }
+
+  .torre-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .torre-card-head {
+    padding: 11px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    background: var(--bg2);
+    transition: background .12s;
+  }
+
+  .torre-card-head:hover { background: var(--card2); }
+
+  .torre-card-name {
+    font-family: 'Syne', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--white);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .torre-badge {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 10px;
+    padding: 2px 8px;
+    background: rgba(0,230,118,.1);
+    color: var(--g);
+    border: 1px solid rgba(0,230,118,.2);
+    border-radius: 10px;
+    font-weight: 600;
+  }
+
+  .chevron { font-size: 9px; color: var(--muted); transition: transform .2s; }
+  .chevron.open { transform: rotate(180deg); }
+
+  .torre-card-body {
+    padding: 14px 16px;
+    border-top: 1px solid var(--border);
+    display: none;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--card);
+  }
+
+  .torre-card-body.open { display: flex; }
+
+  .field-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+
+  .field-hint { font-size: 11px; color: var(--muted); margin-bottom: 6px; opacity: .8; }
+
+  textarea {
+    width: 100%;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    resize: vertical;
+    min-height: 72px;
+    line-height: 1.6;
+    transition: border .15s;
+    outline: none;
+  }
+
+  textarea:focus { border-color: rgba(0,230,118,.4); }
+  textarea::placeholder { color: var(--muted); opacity: .6; }
+
+  /* Toggle QA */
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    padding: 8px 0;
+  }
+
+  .toggle {
+    width: 34px;
+    height: 18px;
+    background: var(--border2);
+    border-radius: 9px;
+    position: relative;
+    transition: background .2s;
+    flex-shrink: 0;
+  }
+
+  .toggle.on { background: var(--gd); }
+
+  .toggle::after {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    background: white;
+    border-radius: 50%;
+    top: 2px;
+    left: 2px;
+    transition: left .2s;
+  }
+
+  .toggle.on::after { left: 18px; }
+  .toggle-label { font-size: 12px; color: var(--text); }
+
+  /* Sidebar */
+  .sidebar { display: flex; flex-direction: column; gap: 16px; }
+
+  /* URL */
+  .url-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+
+  .url-label {
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    white-space: nowrap;
+  }
+
+  .url-input {
+    flex: 1;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 11px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    outline: none;
+    min-width: 0;
+  }
+
+  /* Summary */
+  .summary-box { padding: 16px 20px; }
+
+  .summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+
+  .summary-row:last-child { border-bottom: none; }
+  .summary-key { color: var(--muted); }
+  .summary-val { font-weight: 500; color: var(--white); }
+
+  .g-tag {
+    display: inline-flex;
+    padding: 2px 9px;
+    background: rgba(0,230,118,.08);
+    color: var(--g);
+    border: 1px solid rgba(0,230,118,.15);
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  /* Generar btn */
+  .btn-generar {
+    width: 100%;
+    padding: 14px;
+    background: linear-gradient(135deg, #00E676, #00C853);
+    color: #000;
+    border: none;
+    border-radius: 12px;
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: all .2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    letter-spacing: -.2px;
+  }
+
+  .btn-generar:hover { filter: brightness(1.05); transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,200,83,.3); }
+  .btn-generar:active { transform: scale(.99); }
+  .btn-generar:disabled { background: var(--border2); color: var(--muted); cursor: not-allowed; filter: none; transform: none; box-shadow: none; }
+
+  .spin {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(0,0,0,.2);
+    border-top-color: #000;
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    display: inline-block;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 12px 18px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all .25s;
+    z-index: 999;
+    max-width: 360px;
+    pointer-events: none;
+  }
+
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.ok { background: var(--gd); color: #000; }
+  .toast.err { background: var(--danger); color: white; }
+
+  /* Descargas */
+  .dl-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 14px;
+    border: 1px solid rgba(0,230,118,.25);
+    background: rgba(0,230,118,.06);
+    color: var(--g);
+    border-radius: 9px;
+    text-decoration: none;
+    font-family: 'Syne', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    transition: all .12s;
+    cursor: pointer;
+  }
+
+  .dl-btn:hover { background: rgba(0,230,118,.12); border-color: rgba(0,230,118,.4); }
+
+  /* Sel all */
+  .sel-btn {
+    background: none;
+    border: none;
+    font-size: 11px;
+    color: var(--muted);
+    cursor: pointer;
+    font-family: inherit;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    transition: color .12s;
+  }
+
+  .sel-btn:hover { color: var(--g); }
+
+  /* Col izq */
+  .col-left { display: flex; flex-direction: column; gap: 16px; }
+
+  @media (max-width: 720px) {
+    .layout { grid-template-columns: 1fr; padding: 16px 12px 100px; }
+    .torres-grid { grid-template-columns: 1fr; }
+    .mode-tabs { grid-template-columns: 1fr; }
+    .header { padding: 0 16px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="logo">
+    <div class="logo-mark">P</div>
+    <div>
+      <div class="logo-name">PERIFERIA</div>
+      <div class="logo-sub">Generador de Propuestas</div>
+    </div>
+  </div>
+  <div class="status-pill">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusTxt">sin conectar</span>
+  </div>
+</header>
+
+<div class="layout">
+  <div class="col-left">
+
+    <!-- Tipo de documento -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Tipo de documento</span>
+      </div>
+      <div class="section-body">
+        <div class="mode-tabs">
+          <div class="mode-tab active" data-mode="fda" onclick="setMode('fda')">
+            <div class="mode-tab-icon">📄</div>
+            <div class="mode-tab-label">Fuera del Alcance</div>
+            <div class="mode-tab-desc">FDA por torre</div>
+          </div>
+          <div class="mode-tab" data-mode="perfiles" onclick="setMode('perfiles')">
+            <div class="mode-tab-icon">👥</div>
+            <div class="mode-tab-label">Perfiles</div>
+            <div class="mode-tab-desc">Equipo por torre</div>
+          </div>
+          <div class="mode-tab" data-mode="ambos" onclick="setMode('ambos')">
+            <div class="mode-tab-icon">📦</div>
+            <div class="mode-tab-label">Completo</div>
+            <div class="mode-tab-desc">FDA + Perfiles</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Torres -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Torres tecnológicas</span>
+        <button class="sel-btn" onclick="toggleAll()">Seleccionar todas</button>
+      </div>
+      <div class="section-body">
+        <div class="torres-grid" id="torresGrid"></div>
+      </div>
+    </div>
+
+    <!-- Personalización -->
+    <div class="section" id="detailSection" style="display:none;">
+      <div class="section-head">
+        <span class="section-title">Personalización por torre</span>
+        <span style="font-size:10px;color:var(--muted);">Opcional — vacío = datos automáticos</span>
+      </div>
+      <div style="padding: 12px 20px;">
+        <div class="torres-detail" id="torresDetail"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <!-- Conexión -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Conexión</span>
+      </div>
+      <div style="padding: 14px 16px;">
+        <div class="url-field">
+          <span class="url-label">URL</span>
+          <input class="url-input" id="webhookUrl" type="text" value="http://localhost:8090/generate" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Resumen -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Resumen</span>
+      </div>
+      <div class="summary-box">
+        <div class="summary-row">
+          <span class="summary-key">Modo</span>
+          <span class="summary-val" id="sumMode">—</span>
+        </div>
+        <div class="summary-row">
+          <span class="summary-key">Torres</span>
+          <span class="summary-val" id="sumTorres">0 seleccionadas</span>
+        </div>
+        <div class="summary-row">
+          <span class="summary-key">FDA</span>
+          <span class="summary-val" id="sumFda"><span class="g-tag">6 aleatorios</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Botón -->
+    <button class="btn-generar" id="btnGen" onclick="doGenerate()">
+      <span id="btnIcon">⬇</span>
+      <span id="btnTxt">Generar presentación</span>
+    </button>
+
+    <!-- Descargas -->
+    <div class="section" id="dlSection" style="display:none;">
+      <div class="section-head">
+        <span class="section-title">Archivos generados</span>
+      </div>
+      <div style="padding: 14px 16px;" id="dlPanel"></div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const TORRES = [
+  "FULLSTACK / DESARROLLO","QA","ARQUITECTURA","DATOS","RPA",
+  "DEVOPS","CIBERSEGURIDAD","IA","SAP","PMO","MOBILE","PORTALES","INTEGRACIÓN"
+];
+
+let mode = 'fda';
+let sel = new Set();
+let fdaOvr = {};
+let qaOvr  = {};
+let perfOvr = {};
+
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === m));
+  renderDetail();
+  updateSummary();
+}
+
+function toggleAll() {
+  if (sel.size === TORRES.length) sel.clear();
+  else TORRES.forEach(t => sel.add(t));
+  renderTorres(); renderDetail(); updateSummary();
+}
+
+function toggleTorre(t) {
+  if (sel.has(t)) sel.delete(t); else sel.add(t);
+  renderTorres(); renderDetail(); updateSummary();
+}
+
+function esc(s) { return s.replace(/'/g, "\\'"); }
+function tid(t) { return t.replace(/[^a-zA-Z0-9]/g, '_'); }
+
+function renderTorres() {
+  document.getElementById('torresGrid').innerHTML = TORRES.map(t => `
+    <div class="torre-chip ${sel.has(t) ? 'selected' : ''}" onclick="toggleTorre('${esc(t)}')">
+      <div class="torre-check"><div class="torre-check-inner"></div></div>
+      <span class="torre-name">${t}</span>
+    </div>
+  `).join('');
+}
+
+function renderDetail() {
+  const section = document.getElementById('detailSection');
+  const container = document.getElementById('torresDetail');
+  const showF = mode === 'fda' || mode === 'ambos';
+  const showP = mode === 'perfiles' || mode === 'ambos';
+
+  if (sel.size === 0) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+
+  container.innerHTML = [...sel].map(t => {
+    const id = tid(t);
+    const qa = qaOvr[t] || { include: true };
+    const qaOn = qa.include !== false;
+
+    const fdaBlock = showF ? `
+      <div>
+        <div class="field-label">Ítems FDA</div>
+        <div class="field-hint">Un ítem por línea. Vacío = 6 aleatorios del catálogo.</div>
+        <textarea id="fda_${id}" placeholder="No incluye..." rows="3"
+          oninput="fdaOvr['${esc(t)}'] = this.value">${fdaOvr[t] || ''}</textarea>
+      </div>
+      <div>
+        <div class="toggle-row" onclick="toggleQa('${esc(t)}')">
+          <div class="toggle ${qaOn ? 'on' : ''}" id="tog_${id}"></div>
+          <span class="toggle-label">Incluir Pruebas de Calidad</span>
+        </div>
+        <div id="qaWrap_${id}" style="${qaOn ? '' : 'display:none;'}margin-top:6px;">
+          <div class="field-hint">Vacío = ítems por defecto de QA.</div>
+          <textarea id="qa_${id}" placeholder="No incluye pruebas de..." rows="2"
+            oninput="if(!qaOvr['${esc(t)}'])qaOvr['${esc(t)}']={}; qaOvr['${esc(t)}'].items=this.value">${(qaOvr[t]||{}).items||''}</textarea>
+        </div>
+      </div>
+    ` : '';
+
+    const perfBlock = showP ? `
+      <div>
+        <div class="field-label">Perfiles del equipo</div>
+        <div class="field-hint">Formato: <strong>Rol :: Descripción</strong> — uno por línea. Vacío = perfiles del template.</div>
+        <textarea id="perf_${id}" placeholder="Analista QA :: Experto en pruebas funcionales..." rows="3"
+          oninput="perfOvr['${esc(t)}'] = this.value">${perfOvr[t] || ''}</textarea>
+      </div>
+    ` : '';
+
+    const badge = mode === 'fda' ? 'FDA' : mode === 'perfiles' ? 'Perfiles' : 'FDA + Perfiles';
+
+    return `
+      <div class="torre-card">
+        <div class="torre-card-head" onclick="toggleCard('${id}')">
+          <div class="torre-card-name">
+            ${t} <span class="torre-badge">${badge}</span>
+          </div>
+          <span class="chevron" id="chev_${id}">▼</span>
+        </div>
+        <div class="torre-card-body" id="body_${id}">
+          ${fdaBlock}${perfBlock}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function toggleCard(id) {
+  const body = document.getElementById('body_' + id);
+  const chev = document.getElementById('chev_' + id);
+  body.classList.toggle('open');
+  chev.classList.toggle('open');
+}
+
+function toggleQa(t) {
+  if (!qaOvr[t]) qaOvr[t] = { include: true };
+  qaOvr[t].include = !qaOvr[t].include;
+  const id = tid(t);
+  const tog = document.getElementById('tog_' + id);
+  const wrap = document.getElementById('qaWrap_' + id);
+  if (tog) tog.classList.toggle('on', qaOvr[t].include);
+  if (wrap) wrap.style.display = qaOvr[t].include ? '' : 'none';
+}
+
+function updateSummary() {
+  const labels = { fda: 'Fuera del Alcance', perfiles: 'Perfiles', ambos: 'Completo (FDA + Perfiles)' };
+  document.getElementById('sumMode').textContent = labels[mode];
+  document.getElementById('sumTorres').textContent = sel.size > 0 ? `${sel.size} torre${sel.size !== 1 ? 's' : ''}` : 'Ninguna';
+  const customN = [...sel].filter(t => fdaOvr[t] && fdaOvr[t].trim()).length;
+  const showF = mode === 'fda' || mode === 'ambos';
+  const fdaEl = document.getElementById('sumFda');
+  if (!showF) {
+    fdaEl.innerHTML = '<span style="color:var(--muted)">N/A</span>';
+  } else if (customN > 0) {
+    fdaEl.innerHTML = `<span class="g-tag">${customN} personalizada${customN !== 1 ? 's' : ''}</span>`;
+  } else {
+    fdaEl.innerHTML = '<span class="g-tag">6 aleatorios</span>';
+  }
+}
+
+function showToast(msg, type='ok') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast ${type} show`;
+  setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+function normalizeFiles(files) {
+  if (!files) return [];
+  if (Array.isArray(files)) return files;
+  return Object.entries(files).map(([tipo, val]) => {
+    if (typeof val === 'string') return { tipo, name: tipo + '.pptx', url: val };
+    return { tipo, name: val?.name || tipo + '.pptx', url: val?.url || '' };
+  });
+}
+
+async function doGenerate() {
+  if (sel.size === 0) { showToast('Selecciona al menos una torre', 'err'); return; }
+
+  const btn = document.getElementById('btnGen');
+  btn.disabled = true;
+  document.getElementById('btnIcon').innerHTML = '<span class="spin"></span>';
+  document.getElementById('btnTxt').textContent = 'Generando...';
+
+  const showF = mode === 'fda' || mode === 'ambos';
+  const showP = mode === 'perfiles' || mode === 'ambos';
+
+  const torres = [...sel].map(t => ({
+    name: t,
+    fda_items: (() => {
+      if (!showF) return [];
+      const txt = fdaOvr[t];
+      return (txt && txt.trim()) ? txt.split('\n').map(l => l.trim()).filter(Boolean) : [];
+    })(),
+    include_qa: (() => {
+      if (!showF) return true;
+      return (qaOvr[t] || {}).include !== false;
+    })(),
+    qa_items: (() => {
+      if (!showF) return [];
+      const qa = qaOvr[t] || {};
+      if (qa.include === false) return [];
+      return (qa.items && qa.items.trim()) ? qa.items.split('\n').map(l => l.trim()).filter(Boolean) : [];
+    })(),
+    perfiles: (() => {
+      if (!showP) return [];
+      const txt = perfOvr[t];
+      if (!txt || !txt.trim()) return [];
+      return txt.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+        const sep = l.includes('::') ? '::' : ':';
+        const idx = l.indexOf(sep);
+        if (idx === -1) return { rol: l.trim(), desc: '' };
+        return { rol: l.slice(0, idx).trim(), desc: l.slice(idx + sep.length).trim() };
+      }).filter(p => p.rol);
+    })()
+  }));
+
+  try {
+    const r = await fetch(document.getElementById('webhookUrl').value.trim(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, torres })
+    });
+
+    document.getElementById('statusDot').className = 'status-dot ok';
+    document.getElementById('statusTxt').textContent = 'conectado';
+
+    if (!r.ok) throw new Error(`HTTP ${r.status} — ¿el servidor está corriendo?`);
+
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'Error generando el archivo');
+
+    const files = normalizeFiles(d.files).filter(f => f && f.url);
+    if (!files.length) throw new Error('No se recibieron archivos');
+
+    const panel = document.getElementById('dlPanel');
+    const dlSection = document.getElementById('dlSection');
+    panel.innerHTML = files.map(f => `
+      <a class="dl-btn" href="${f.url}" download="${f.name || 'propuesta.pptx'}">
+        📥 ${f.name || 'propuesta.pptx'}
+      </a>
+    `).join('');
+    dlSection.style.display = 'block';
+    dlSection.scrollIntoView({ behavior: 'smooth' });
+
+    files.forEach((f, i) => {
+      setTimeout(() => {
+        const a = document.createElement('a');
+        a.href = f.url; a.download = f.name || 'propuesta.pptx';
+        a.style.display = 'none';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      }, i * 600);
+    });
+
+    showToast('✓ Presentación generada con éxito', 'ok');
+  } catch(e) {
+    document.getElementById('statusDot').className = 'status-dot err';
+    document.getElementById('statusTxt').textContent = 'error';
+    showToast('✗ ' + e.message, 'err');
+    console.error(e);
+  }
+
+  btn.disabled = false;
+  document.getElementById('btnIcon').textContent = '⬇';
+  document.getElementById('btnTxt').textContent = 'Generar presentación';
+}
+
+renderTorres();
+updateSummary();
+</script>
+</body>
+</html>
