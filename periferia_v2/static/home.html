@@ -1053,6 +1053,24 @@ function parseExcel(buffer, filename){
     }
 
     // Hoja RESUMEN → torres — columna 1 tiene los nombres, columna 2 las horas
+    // Mapa de nombres del RESUMEN a nombres canónicos (deben coincidir con TORRES_ALL
+    // y con las claves del catálogo Generales_para_todos.xlsx).
+    const TORRE_RESUMEN_MAP = {
+      'Torre Full Stack':     'FULLSTACK / DESARROLLO',
+      'Torre Data':           'DATOS',
+      'Torre IA':             'IA',
+      'Torre Portales':       'PORTALES',
+      'Torre Integración':    'INTEGRACIÓN',
+      'Torre Integracion':    'INTEGRACIÓN',
+      'Torre DevOps':         'DEVOPS',
+      'Torre RPA':            'RPA',
+      'Torre Cyberseguridad': 'CIBERSEGURIDAD',
+      'Torre QA':             'QA',
+      'Torre Arquitectura':   'ARQUITECTURA',
+      'Torre Mobile':         'MOBILE',
+      'Torre SAP':            'SAP',
+      'Torre PMO':            'PMO',
+    };
     if(wb.SheetNames.includes('RESUMEN')){
       const rows = XLSX.utils.sheet_to_json(wb.Sheets['RESUMEN'], { header:1, defval:null });
       let inTorres = false;
@@ -1060,22 +1078,36 @@ function parseExcel(buffer, filename){
         if(row[1]==='TORRE' && row[2]==='Horas'){ inTorres=true; continue; }
         if(!inTorres) continue;
         if(!row[1] || String(row[1]).includes('TOTALES')) break;
-        const nombre = String(row[1]).trim();
-        if(!nombre) continue;
-        const horas   = typeof row[2]==='number' ? row[2] : 0;
-        const semanas = typeof row[6]==='number' ? parseFloat(row[6].toFixed(1)) : 0;
+        const rawNombre = String(row[1]).trim();
+        if(!rawNombre) continue;
+        // Usar nombre canónico si existe en el mapa, si no usar el raw sin prefijo
+        const nombre = TORRE_RESUMEN_MAP[rawNombre] || rawNombre.replace(/^Torre\s+/i, '').toUpperCase();
+        const horas   = typeof row[2]==='number' ? row[2] : (parseFloat(row[2]) || 0);
+        const semanas = typeof row[6]==='number' ? parseFloat(row[6].toFixed(1)) : (parseFloat(row[6]) || 0);
         if(horas > 0)
-          data.torres.push({ nombre: nombre.replace('Torre ',''), horas, semanas });
+          data.torres.push({ nombre, horas, semanas });
       }
     }
 
     // Hoja Anexos → perfiles
+    // Columnas esperadas: [0]=Torre, [1]=Perfil/Rol, [2]=Seniority/Descripción
     if(wb.SheetNames.includes('Anexos')){
       const rows = XLSX.utils.sheet_to_json(wb.Sheets['Anexos'], { header:1, defval:null });
       for(const row of rows){
-        if(!row[0] || row[0]==='TORRE' || row[0]==='TOTALES PROYECTO' || row[0]==='DIAGRAMAS') continue;
-        if(row[1] && typeof row[1]==='string')
-          data.perfiles.push({ torre: String(row[0]).replace('Torre ',''), perfil: row[1] });
+        // Saltar encabezados y filas de totales/separadores
+        const cell0 = row[0] != null ? String(row[0]).trim() : '';
+        if(!cell0 || cell0==='TORRE' || cell0==='TOTALES PROYECTO' || cell0==='DIAGRAMAS') continue;
+        // Aceptar perfil si la columna [1] tiene cualquier valor no vacío
+        // (se relajó el typeof==='string' para no perder valores numéricos inadvertidos)
+        const perfil = row[1] != null && String(row[1]).trim() !== '' ? String(row[1]).trim() : null;
+        if(!perfil) continue;
+        // Capturar descripción/seniority de columna [2] si existe
+        const seniority = row[2] != null && String(row[2]).trim() !== '' ? String(row[2]).trim() : '';
+        data.perfiles.push({
+          torre:    cell0.replace('Torre ','').replace('TORRE ',''),
+          perfil:   perfil,
+          seniority: seniority
+        });
       }
     }
 

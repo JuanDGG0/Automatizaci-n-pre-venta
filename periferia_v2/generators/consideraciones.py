@@ -84,6 +84,34 @@ def _get_slide_order(pptx_bytes):
         return ['ppt/' + rid_map[s.attrib[f'{{{R}}}id']]
                 for s in prs.find('.//p:sldIdLst', ns)]
 
+
+def _find_cons_slide(slides_order, files_dict):
+    """
+    Localiza el slide de Consideraciones por contenido (nombre de shape),
+    no por índice fijo. Necesario porque fda_perfiles puede insertar slides
+    extra antes de este slide, desplazando todos los índices posteriores.
+
+    El slide de Consideraciones tiene EXACTAMENTE 4 shapes con SHAPE_NAME.
+    Otros slides del template pueden tener 1 de este mismo shape — hay que
+    buscar el que tenga >= 4 para no confundirlos.
+
+    Fallback al índice 9 si no se encuentra ningún slide con 4+ shapes.
+    """
+    for path in slides_order:
+        root = etree.fromstring(files_dict[path])
+        count = sum(
+            1 for sp in root.iter(f'{{{P}}}sp')
+            for nvpr in [sp.find(f'.//{{{P}}}cNvPr')]
+            if nvpr is not None and SHAPE_NAME in nvpr.attrib.get('name', '')
+        )
+        if count >= 4:
+            return path
+    # Fallback defensivo: índice original del template
+    fallback_idx = min(9, len(slides_order) - 1)
+    print(f'[CONSIDERACIONES] Advertencia: marcador "{SHAPE_NAME}" (×4) no encontrado. '
+          f'Usando índice {fallback_idx} como fallback.')
+    return slides_order[fallback_idx]
+
 def _edit_consideraciones_slide(xml_bytes, consideraciones):
     """Edita el slide 10 con las consideraciones."""
     root = etree.fromstring(xml_bytes)
@@ -131,7 +159,13 @@ def edit(pptx_bytes, config):
     filial_nombre = FILIAL_NOMBRES.get(filial, 'Periferia IT')
 
     # Determinar consideraciones
+    # El JS envía opciones.consideraciones como boolean (true = "con genéricos").
+    # Si la pill está activada → cargar genéricos.
+    # Si la pill está desactivada → también cargar genéricos (no hay fuente Excel
+    # para consideraciones; "solo del Excel" equivale a dejar el template sin cambios,
+    # pero para esta sección siempre aplicamos los genéricos filtrados por torre).
     if opciones.get('consideraciones') == 'manual':
+        # Compatibilidad con llamadas antiguas que envíen el string 'manual'
         consideraciones = config.get('consideraciones', [])[:4]
     else:
         consideraciones = _load_consideraciones(torres_activas, cliente, filial_nombre)
@@ -143,8 +177,9 @@ def edit(pptx_bytes, config):
     with zipfile.ZipFile(io.BytesIO(pptx_bytes)) as zin:
         files_dict = {name: zin.read(name) for name in zin.namelist()}
 
-    # Slide 10 → Consideraciones (índice 9)
-    cons_slide_key = slides_order[9]
+    # Localizar slide de Consideraciones por contenido, no por índice fijo.
+    # Índice fijo (9) se rompe si fda_perfiles añadió slides extra antes.
+    cons_slide_key = _find_cons_slide(slides_order, files_dict)
     files_dict[cons_slide_key] = _edit_consideraciones_slide(
         files_dict[cons_slide_key],
         consideraciones

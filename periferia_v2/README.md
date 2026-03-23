@@ -1,4 +1,4 @@
-# 🚀 Generador Automático de Propuestas Comerciales
+# Generador Automático de Propuestas Comerciales
 ### Periferia IT Group — Equipo de Preventa
 
 ---
@@ -67,105 +67,87 @@ cd ~/Automatizaci-n-pre-venta/periferia_v2
 ```bash
 python3 server.py
 ```
-Verás: `Servidor listo en http://localhost:8090/generate`
+Verás: `Servidor listo en http://localhost:8090`
 
-**3. Abre el frontend**
+**3. Abre el frontend en el navegador**
+```
+http://localhost:8090
+```
 
-Abre `static/home.html` directamente en el navegador (doble clic desde el explorador de archivos de Windows).
-
-> ⚠️ El servidor debe estar corriendo **antes** de hacer clic en "Generar documento".
-> 
-> ⚠️ Cada vez que hagas cambios en el código, reinicia el servidor con **Ctrl+C** y vuelve a correr `python3 server.py`.
+> El servidor debe estar corriendo **antes** de hacer clic en "Generar documento".
+>
+> Cada vez que hagas cambios en el código, reinicia el servidor con **Ctrl+C** y vuelve a correr `python3 server.py`.
 
 ---
 
 ## Estructura del proyecto
 
 ```
-Automatizaci-n-pre-venta/
-└── periferia_v2/
-    ├── server.py                        ← Servidor HTTP (no tocar)
-    ├── requirements.txt                 ← Dependencias Python
-    ├── static/
-    │   └── home.html                    ← Interfaz web (abrir en navegador)
-    ├── data/
-    │   ├── Generales_para_todos.xlsx    ← Catálogo de contenido genérico
-    │   └── FOR-CA-CUADRO_BASE_ESTIMACIÓN.xlsx
-    ├── templates/
-    │   ├── CS-FR-012-...-CORP.pptx      ← Plantilla Periferia IT Corp
-    │   ├── CS-FR-005-...-GROUP.pptx     ← Plantilla Periferia IT Group
-    │   └── CS-FR-011-...-CBIT.pptx      ← Plantilla CBIT
-    └── generators/
-        ├── __init__.py                  ← Orquestador (llama a los 3 generators)
-        ├── fda_perfiles.py              ← Heidy: slides 8 (Perfiles) y 11 (FDA)
-        ├── consideraciones.py           ← Juan: slide 10
-        └── cronograma_entregables.py    ← José: slides 7 y 9
+periferia_v2/
+├── server.py                        ← Servidor HTTP
+├── requirements.txt                 ← Dependencias Python
+├── static/
+│   └── home.html                    ← Interfaz web
+├── data/
+│   ├── Generales_para_todos.xlsx    ← Catálogo de contenido genérico
+│   └── FOR-CA-CUADRO_BASE_ESTIMACIÓN_PROPUESTAS.xlsx
+├── templates/
+│   ├── CS-FR-012-...-CORP.pptx      ← Plantilla Periferia IT Corp
+│   ├── CS-FR-005-...-GROUP.pptx     ← Plantilla Periferia IT Group
+│   └── CS-FR-011-...-CBIT.pptx      ← Plantilla CBIT
+└── generators/
+    ├── __init__.py                  ← Orquestador (llama a los 3 generators en cadena)
+    ├── fda_perfiles.py              ← Heidy: slides Perfiles y Fuera del Alcance
+    ├── consideraciones.py           ← Juan: slide Consideraciones
+    └── cronograma_entregables.py    ← José: slide Entregables
 ```
 
 ---
 
 ## Slides por responsable
 
-| Slide | Sección | Quién |
-|-------|---------|-------|
-| 7 | Entregables | José |
-| 8 | Perfiles | Heidy |
-| 9 | Cronograma | José |
-| 10 | Consideraciones | Juan |
-| 11 | Fuera del Alcance | Heidy |
+| Slide | Sección | Quién | Estado |
+|-------|---------|-------|--------|
+| 7 | Entregables | José | Pendiente |
+| 8 | Perfiles | Heidy | Activo |
+| 9 | Cronograma | José | Pendiente |
+| 10 | Consideraciones | Juan | Pendiente |
+| 11 | Fuera del Alcance | Heidy | Activo |
 
 ---
 
-## Cómo implementar tu generator
+## Lógica de cada generator
 
-Tu función debe llamarse `edit(pptx_bytes, config)`, recibir el PPTX como bytes, editar tus slides y retornar los bytes modificados.
+### Heidy — `fda_perfiles.py`
 
-```python
-# generators/mi_generator.py
-import io, zipfile
-from lxml import etree
+**Slide Perfiles:**
+- Toma perfiles del Excel (hoja `Perfiles` de `Generales_para_todos.xlsx`) filtrados por torres activas, o del Excel del cliente (hoja Anexos) si el usuario subió uno.
+- Pagina en slides de máximo 4 tarjetas. Si hay 5+ perfiles, crea slides adicionales.
+- Slides con menos de 4 tarjetas se centran automáticamente.
+- Pill "Genéricos" ON → usa `Generales_para_todos.xlsx`. Pill OFF + Excel con perfiles → usa los del Excel.
 
-P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
-A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
-R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+**Slide Fuera del Alcance:**
+- Pill ON → muestra la cláusula general (aplica para cualquier combinación de torres).
+- Pill OFF + 1 torre → muestra los ítems específicos de esa torre.
+- Pill OFF + múltiples torres → combina ítems específicos de cada torre (hasta 6 en total).
+- Si QA está entre las torres activas → oculta la card verde de QA (ya está cubierto).
+- Si QA no está entre las torres → la card QA muestra "Las pruebas de calidad no hacen parte de esta propuesta."
 
-def _get_slide_order(pptx_bytes):
-    """Retorna el orden real de slides según presentation.xml"""
-    with zipfile.ZipFile(io.BytesIO(pptx_bytes)) as z:
-        rels = etree.fromstring(z.read('ppt/_rels/presentation.xml.rels'))
-        rid_map = {r.attrib['Id']: r.attrib['Target'] for r in rels}
-        prs = etree.fromstring(z.read('ppt/presentation.xml'))
-        ns = {'p': P, 'r': R}
-        return ['ppt/' + rid_map[s.attrib[f'{{{R}}}id']]
-                for s in prs.find('.//p:sldIdLst', ns)]
+### Juan — `consideraciones.py`
 
-def edit(pptx_bytes, config):
-    slides_order = _get_slide_order(pptx_bytes)
+- Toma consideraciones de `Generales_para_todos.xlsx` hoja `Consideraciones`.
+- Filtra por las torres activas del proyecto.
+- Muestra máximo 4 consideraciones (una por shape del slide).
+- Reemplaza `XXXXXXXXXX` por el nombre del cliente y `Filial` por el nombre de la filial.
 
-    # Leer todos los archivos del ZIP
-    files_dict = {}
-    with zipfile.ZipFile(io.BytesIO(pptx_bytes)) as zin:
-        files_dict = {name: zin.read(name) for name in zin.namelist()}
+### José — `cronograma_entregables.py`
 
-    # Editar TU slide (ej: slide 10 = índice 9)
-    slide_key = slides_order[9]  # ← cambia el índice según tu slide
-    root = etree.fromstring(files_dict[slide_key])
+- **Entregables (slide 7):** toma entregables de `Generales_para_todos.xlsx` hoja `Entregables`, agrupa por torres activas, muestra máximo 3 torres (una por columna).
+- **Cronograma (slide 9):** pendiente de implementar.
 
-    # ... tu lógica aquí ...
+---
 
-    files_dict[slide_key] = etree.tostring(
-        root, xml_declaration=True, encoding='UTF-8', standalone=True
-    )
-
-    # Reconstruir el ZIP y retornar bytes
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zout:
-        for name, data in files_dict.items():
-            zout.writestr(name, data)
-    return buf.getvalue()
-```
-
-### El config que recibes
+## El config que reciben los generators
 
 ```python
 config = {
@@ -174,65 +156,43 @@ config = {
         'cliente':  'Empresa XYZ',
         'proyecto': 'Proyecto ABC',
         'torres': [
-            {'nombre': 'Full Stack', 'horas': 480, 'semanas': 12},
-            {'nombre': 'QA',         'horas': 160, 'semanas': 4},
+            {'nombre': 'FULLSTACK / DESARROLLO', 'horas': 480, 'semanas': 12},
+            {'nombre': 'QA',                     'horas': 160, 'semanas': 4},
         ],
         'perfiles': [
-            {'torre': 'Full Stack', 'perfil': 'Desarrollador Backend Java'},
+            {'torre': 'FULLSTACK / DESARROLLO', 'perfil': 'Desarrollador Backend Java',
+             'seniority': 'Senior, 5+ años en Java Spring Boot', 'horas_mes': 160, 'cantidad': 1},
         ]
     },
-    'torres_seleccionadas': [],  # si el Excel estaba vacío
+    'torres_seleccionadas': [],   # usado si excel_data.torres está vacío
     'opciones': {
-        'perfiles':        'genericos',  # 'excel' | 'genericos'
-        'consideraciones': 'genericos',  # 'genericos' | 'manual'
-        'entregables':     'genericos',  # 'genericos' | 'manual'
+        'perfiles':        True,  # True = usar genéricos, False = usar datos del Excel
+        'fda':             False, # True = cláusula general, False = específico por torre
+        'consideraciones': False, # True = usar genéricos
+        'entregables':     False, # True = usar genéricos
     }
 }
 ```
 
-### Probar solo tu generator
-
-```python
-# test_mi_generator.py  ← crea este archivo en periferia_v2/
-from generators.mi_generator import edit
-
-pptx = open('templates/CS-FR-012-PROPUESTA_COMERCIAL_PERIFERIA_IT_CORP.pptx', 'rb').read()
-
-config = {
-    'filial': 'corp',
-    'excel_data': {
-        'cliente': 'Cliente Test',
-        'torres': [{'nombre': 'Full Stack', 'horas': 480, 'semanas': 12}]
-    },
-    'torres_seleccionadas': [],
-    'opciones': {}
-}
-
-open('test_output.pptx', 'wb').write(edit(pptx, config))
-print('Listo! Abre test_output.pptx')
-```
-
-Corre con:
-```bash
-python3 test_mi_generator.py
-```
+> **Nombres de torres:** deben usar los nombres canónicos definidos en `Generales_para_todos.xlsx`.
+> El frontend ya mapea automáticamente los nombres del Excel del cliente a estos nombres canónicos.
 
 ---
 
-## Activar tu generator en producción
+## Datos genéricos — `Generales_para_todos.xlsx`
 
-Cuando termines, dile a Heidy para que descomente tu línea en `generators/__init__.py`:
+| Hoja | Contenido | Usado por |
+|------|-----------|-----------|
+| `Fuera del Alcance` | Ítems FDA por torre + cláusula general | Heidy |
+| `Perfiles` | Roles y descripciones por torre | Heidy |
+| `Consideraciones` | Consideraciones por torre | Juan |
+| `Entregables` | Lista de entregables por torre | José |
 
-```python
-# pptx_bytes = edit_consideraciones(pptx_bytes, config)        ← Juan
-# pptx_bytes = edit_cronograma_entregables(pptx_bytes, config)  ← José
-```
+Para agregar o modificar contenido genérico, edita directamente este Excel. No se necesita cambiar código.
 
 ---
 
 ## Subir cambios al repositorio
-
-Cuando hagas cambios en tu generator y quieras subirlos:
 
 ```bash
 cd ~/Automatizaci-n-pre-venta
@@ -241,26 +201,25 @@ git commit -m "descripción de lo que hiciste"
 git push
 ```
 
-> Para el `git push` necesitas un token de GitHub (no la contraseña).  
+> Para el `git push` necesitas un token de GitHub (no la contraseña).
 > Generalo en: **https://github.com/settings/tokens** → **Tokens (classic)** → marcar **repo**
 
 ---
 
 ## Inspeccionar shapes de un slide
 
-Para saber los nombres de los shapes que debes editar en tu slide:
+Para saber los nombres de los shapes de un slide específico:
 
 ```python
-# inspeccionar_slide.py ← crea este archivo en periferia_v2/
+# inspeccionar_slide.py  ← crea este archivo en periferia_v2/ (no commitear)
 import zipfile
 from lxml import etree
 
 P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 
-# Cambia slide10.xml por el slide que te corresponde
 with zipfile.ZipFile('templates/CS-FR-012-PROPUESTA_COMERCIAL_PERIFERIA_IT_CORP.pptx') as z:
-    root = etree.fromstring(z.read('ppt/slides/slide10.xml'))
+    root = etree.fromstring(z.read('ppt/slides/slide10.xml'))  # cambia el número
     for sp in root.iter(f'{{{P}}}sp'):
         nvpr = sp.find(f'.//{{{P}}}cNvPr')
         name = nvpr.attrib.get('name', '') if nvpr is not None else ''
@@ -279,20 +238,17 @@ python3 inspeccionar_slide.py
 
 ## Preguntas frecuentes
 
-**¿Por qué no se descarga el PPTX?**  
+**¿Por qué no se descarga el PPTX?**
 Verifica que el servidor esté corriendo (`python3 server.py`) y que no haya errores en la terminal.
 
-**¿Puedo probar con el Excel vacío?**  
+**¿Puedo probar con el Excel vacío?**
 Sí. Si el Excel no tiene horas en ninguna torre, el sistema te pide que selecciones las torres manualmente y usa el contenido de `data/Generales_para_todos.xlsx`.
 
-**¿Dónde están los datos genéricos?**  
+**¿Dónde están los datos genéricos?**
 En `data/Generales_para_todos.xlsx`. Tiene 4 hojas: `Fuera del Alcance`, `Perfiles`, `Consideraciones`, `Entregables`.
 
-**¿Por qué el slide X quedó con las X del template?**  
-Porque ese generator aún no está implementado. Los slides sin generator quedan con el contenido placeholder del template original.
+**¿Por qué el slide de Cronograma quedó sin datos?**
+El slide de Cronograma (slide 9) está pendiente de implementar. Queda con el contenido placeholder del template.
 
 ---
 
-## Contacto
-
-Dudas sobre el proyecto → **Heidy Romero** (Preventa)
