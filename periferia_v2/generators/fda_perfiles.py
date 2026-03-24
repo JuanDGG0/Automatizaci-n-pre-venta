@@ -75,7 +75,7 @@ CLAUSULA_GENERAL = [
 ]
 
 # Máx. caracteres de descripción por tarjeta de perfil (evita desbordamiento)
-DESC_MAX_CHARS = 260
+DESC_MAX_CHARS = 200
 
 
 # ═══════════════════════════════ utilidades ══════════════════════════════════
@@ -222,17 +222,17 @@ def _truncate_desc(text, max_chars=DESC_MAX_CHARS):
     if last_period >= 20:
         return text[:last_period + 1]      # incluir el punto; sin elipsis
 
-    # Sin punto útil → cortar en límite de palabra
-    truncated = text[:max_chars].rsplit(' ', 1)[0]
+    # Sin punto útil → cortar en límite de palabra (max_chars-1 para dar espacio al …)
+    truncated = text[:max_chars - 1].rsplit(' ', 1)[0]
     return truncated.rstrip('.,;:') + '\u2026'
 
 
 def _normalize_bodyPr(txb):
     """
-    Normaliza el bodyPr del txBody para prevenir desbordamiento:
-    - wrap='square'  → word wrap habilitado
-    - normAutofit    → el texto se reduce si no cabe (no expande la caja)
-    - elimina spAutoFit que podría agrandar la caja y romper el layout
+    Normaliza el bodyPr del txBody:
+    - wrap='square'   → word wrap habilitado
+    - normAutofit     → la fuente se reduce ligeramente si el texto no cabe
+                        (no expande la caja, evita desbordamiento visual)
     """
     bodyPr = txb.find(f'{{{A}}}bodyPr')
     if bodyPr is None:
@@ -243,6 +243,42 @@ def _normalize_bodyPr(txb):
         if el is not None:
             bodyPr.remove(el)
     etree.SubElement(bodyPr, f'{{{A}}}normAutofit')
+
+
+# ── Constantes para pre-calcular alto de cuadros de descripción ──────────────
+# Calibri 12pt en una caja de ~38.5 mm de ancho ≈ 17 chars/línea
+_DESC_CHARS_PER_LINE = 17
+# 12pt × 110% line spacing × 12700 EMU/pt ≈ 167 640 EMU por línea
+_DESC_LINE_HEIGHT_EMU = 167_640
+# Margen inferior de seguridad
+_DESC_PADDING_EMU = 200_000
+
+
+def _update_desc_height(sp, desc_text):
+    """
+    Ajusta el alto (ext.cy) del cuadro de descripción según el contenido.
+    Combinado con spAutoFit, garantiza que el texto sea visible
+    incluso antes de que PowerPoint haga el primer auto-fit.
+    """
+    spPr = sp.find(f'{{{P}}}spPr')
+    if spPr is None:
+        return
+    xfrm = spPr.find(f'{{{A}}}xfrm')
+    if xfrm is None:
+        return
+    ext = xfrm.find(f'{{{A}}}ext')
+    if ext is None:
+        return
+
+    # Calcular líneas necesarias considerando posibles saltos de línea en la desc
+    text_lines = [l for l in desc_text.split('\n') if l.strip()] or [desc_text]
+    total_lines = sum(
+        max(1, -(-len(line) // _DESC_CHARS_PER_LINE))
+        for line in text_lines
+    )
+    needed_cy = total_lines * _DESC_LINE_HEIGHT_EMU + _DESC_PADDING_EMU
+    current_cy = int(ext.attrib.get('cy', 0))
+    ext.attrib['cy'] = str(max(current_cy, needed_cy))
 
 
 # ══════════════════════════ posicionamiento de grupos ════════════════════════
@@ -348,7 +384,8 @@ def _find_profile_groups(root):
 # ═══════════════════════════════ slide perfiles ══════════════════════════════
 
 def _build_para_from_template(template_para, text):
-    """Clona el formato de un párrafo plantilla con un nuevo texto."""
+    """Clona el formato de un párrafo plantilla con un nuevo texto.
+    El run se inserta ANTES de a:endParaRPr para respetar el orden OOXML."""
     new_para = copy.deepcopy(template_para)
     for r in new_para.findall(f'{{{A}}}r'):
         new_para.remove(r)
@@ -360,12 +397,31 @@ def _build_para_from_template(template_para, text):
         orig_rPr = orig_r.find(f'{{{A}}}rPr')
         if orig_rPr is not None:
             rPr = copy.deepcopy(orig_rPr)
-    r_elem = etree.SubElement(new_para, f'{{{A}}}r')
+    r_elem = etree.Element(f'{{{A}}}r')
     if rPr is not None:
         r_elem.append(rPr)
     t_elem = etree.SubElement(r_elem, f'{{{A}}}t')
     t_elem.text = text
+    # Insertar ANTES de endParaRPr (si existe) para OOXML válido
+    end_rpr = new_para.find(f'{{{A}}}endParaRPr')
+    if end_rpr is not None:
+        end_rpr.addprevious(r_elem)
+    else:
+        new_para.append(r_elem)
     return new_para
+
+
+def _truncate_to_sentences(text, max_sentences=2):
+    """Corta el texto después de max_sentences oraciones (puntos finales)."""
+    if not text:
+        return text
+    count = 0
+    for i, c in enumerate(text):
+        if c == '.':
+            count += 1
+            if count >= max_sentences:
+                return text[:i + 1].strip()
+    return text.strip()
 
 
 def _edit_perfiles_slide(xml_bytes, perfiles):
@@ -412,12 +468,12 @@ def _edit_perfiles_slide(xml_bytes, perfiles):
                         for t in all_t[1:]:
                             t.text = ''
 
-            # Escribir descripción con truncado y control de desbordamiento
+            # Escribir descripción (máx 2 oraciones para no desbordar el cuadro)
             sp_desc = inner_name_map.get(desc_name)
             if sp_desc is not None:
                 txb = sp_desc.find(f'{{{P}}}txBody')
                 if txb is not None:
-                    desc_text = _truncate_desc(p['desc'])
+                    desc_text = _truncate_to_sentences((p['desc'] or '').strip())
                     lines = [l for l in desc_text.split('\n') if l.strip()] or ['']
                     paras = txb.findall(f'{{{A}}}p')
                     template_para = paras[0] if paras else None
@@ -462,19 +518,49 @@ def _edit_perfiles_slide(xml_bytes, perfiles):
 
 # ═════════════════════════════════ slide FDA ═════════════════════════════════
 
-def _edit_fda_slide(xml_bytes, torres, fda_db, usar_genericos=True):
+def _fill_qa_card(sp, lines):
+    """
+    Llena el CuadroTexto 32 con una lista de líneas de texto.
+    Preserva el formato (bullets blancos, tamaño, fuente) del template.
+    """
+    txb = sp.find(f'{{{P}}}txBody')
+    if txb is None:
+        return
+    paras = txb.findall(f'{{{A}}}p')
+    template_para = paras[0] if paras else None
+    for para in paras:
+        txb.remove(para)
+    for line in lines:
+        if template_para is not None:
+            txb.append(_build_para_from_template(template_para, line))
+        else:
+            p_xml = (f'<a:p xmlns:a="{A}"><a:r><a:t>{_esc(line)}</a:t></a:r></a:p>')
+            txb.append(etree.fromstring(p_xml))
+    # spAutoFit para que el cuadro se expanda si hay muchos ítems
+    bodyPr = txb.find(f'{{{A}}}bodyPr')
+    if bodyPr is not None:
+        for tag in ('spAutoFit', 'noAutofit', 'normAutofit'):
+            el = bodyPr.find(f'{{{A}}}{tag}')
+            if el is not None:
+                bodyPr.remove(el)
+        etree.SubElement(bodyPr, f'{{{A}}}spAutoFit')
+
+
+def _edit_fda_slide(xml_bytes, torres, fda_db, usar_genericos=True, incluir_qa=True):
     """
     Edita el slide FDA.
     - usar_genericos=True  (pill ON):  cláusula general siempre
     - usar_genericos=False (pill OFF): ítems específicos de cada torre activa
-    - Si QA está entre las torres: ocultar card QA
-    - Si QA NO está entre las torres: mostrar mensaje de exclusión en card QA
+
+    Panel QA (cuadro verde derecho — SIEMPRE visible):
+    - incluir_qa=True:  mostrar ítems FDA específicos de QA del catálogo
+    - incluir_qa=False: mostrar "Las pruebas de calidad no hacen parte..."
     """
     root = etree.fromstring(xml_bytes)
 
     torres_norm = [_norm(t) for t in torres]
-    hay_qa = any('QA' in t for t in torres_norm)
 
+    # ── Ítems columna principal FDA ──────────────────────────────────────────
     if usar_genericos:
         items = CLAUSULA_GENERAL[:6]
     elif len(torres) == 1:
@@ -487,7 +573,6 @@ def _edit_fda_slide(xml_bytes, torres, fda_db, usar_genericos=True):
                     break
         items = items[:6] if items else CLAUSULA_GENERAL[:6]
     else:
-        # Pill OFF + múltiples torres: recopilar ítems específicos de cada torre
         items = []
         for torre_key in torres_norm:
             tower_items = fda_db.get(torre_key, [])
@@ -502,6 +587,18 @@ def _edit_fda_slide(xml_bytes, torres, fda_db, usar_genericos=True):
             if len(items) >= 6:
                 break
         items = items[:6] if items else CLAUSULA_GENERAL[:6]
+
+    # ── Ítems panel QA ───────────────────────────────────────────────────────
+    if incluir_qa:
+        qa_items = fda_db.get('QA', [])
+        if not qa_items:
+            for k in fda_db:
+                if 'QA' in k:
+                    qa_items = fda_db[k]
+                    break
+        qa_lines = qa_items[:4] if qa_items else ['Pruebas de calidad incluidas en el alcance del proyecto.']
+    else:
+        qa_lines = ['Las pruebas de calidad no hacen parte de esta propuesta.']
 
     for sp in root.iter(f'{{{P}}}sp'):
         nvpr = sp.find(f'.//{{{P}}}cNvPr')
@@ -524,17 +621,8 @@ def _edit_fda_slide(xml_bytes, torres, fda_db, usar_genericos=True):
                 _hide_shape(sp)
 
         elif name == QA_CARD:
-            if hay_qa:
-                _hide_shape(sp)
-            else:
-                # QA no es parte del proyecto → mostrar mensaje de exclusión
-                txb = sp.find(f'{{{P}}}txBody')
-                if txb is not None:
-                    all_t = txb.findall(f'.//{{{A}}}t')
-                    if all_t:
-                        all_t[0].text = 'Las pruebas de calidad no hacen parte de esta propuesta.'
-                        for t in all_t[1:]:
-                            t.text = ''
+            # Siempre visible: con ítems QA o con mensaje de exclusión
+            _fill_qa_card(sp, qa_lines)
 
         elif name == 'Título 1':
             txb = sp.find(f'{{{P}}}txBody')
@@ -550,8 +638,7 @@ def _edit_fda_slide(xml_bytes, torres, fda_db, usar_genericos=True):
                     for t in txb.findall(f'.//{{{A}}}t'):
                         if t.text and TITULO_TECNICO in t.text:
                             t.text = 'Fuera del Alcance General'
-            elif 'Pruebas de Calidad' in txt and hay_qa:
-                _hide_shape(sp)
+            # El título "Pruebas de Calidad" se mantiene siempre visible
 
     return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
@@ -752,8 +839,20 @@ def edit(pptx_bytes, config):
     # ── Editar slide FDA ────────────────────────────────────────────────────
     # opciones.fda: true = pill ON = usar genéricos, false = pill OFF = específicos por torre
     usar_genericos_fda = bool(opciones.get('fda', True))
+    incluir_qa = bool(config.get('incluir_qa', True))
+
+    # Si el Excel tiene ítems FDA en la hoja Estimación (col K) y la pill está OFF,
+    # mezclar esos ítems en fda_db (prioridad sobre el catálogo genérico).
+    excel_fda = excel_data.get('fda') or {}
+    if excel_fda and not usar_genericos_fda:
+        fda_db = dict(fda_db)  # copia para no mutar el original
+        for torre_name, items in excel_fda.items():
+            items_limpios = [str(it).strip() for it in (items or []) if str(it).strip()]
+            if items_limpios:
+                fda_db[_norm(torre_name)] = items_limpios
+
     files_dict[fda_slide_key] = _edit_fda_slide(
-        files_dict[fda_slide_key], torres_activas, fda_db, usar_genericos_fda
+        files_dict[fda_slide_key], torres_activas, fda_db, usar_genericos_fda, incluir_qa
     )
 
     # ── Editar slide(s) Perfiles ────────────────────────────────────────────

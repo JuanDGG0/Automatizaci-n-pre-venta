@@ -665,10 +665,19 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px" id="torresSelector"></div>
 
-      <!-- Panel QA por torre -->
+      <!-- Panel QA global -->
       <div id="qa-por-torre" style="display:none;margin-bottom:24px">
-        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px">¿Incluir FDA de Pruebas de Calidad (QA) por torre?</div>
-        <div id="qa-torres-list" style="display:flex;flex-direction:column;gap:8px"></div>
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px">¿Las Pruebas de Calidad (QA) hacen parte de esta propuesta?</div>
+        <div class="qa-row">
+          <div class="qa-row-left">
+            <span class="qa-row-icon">🔍</span>
+            <span>Pruebas de Calidad</span>
+          </div>
+          <div class="qa-toggle" onclick="toggleQaGlobal()">
+            <div id="qa-global-track" class="qa-toggle-track on"></div>
+            <span id="qa-global-label" class="qa-toggle-label">Sí incluye QA</span>
+          </div>
+        </div>
       </div>
 
       <div class="xdetail-card" style="margin-bottom:0">
@@ -962,7 +971,7 @@ let S = {
   excelVacio: false,
   excelData: null,
   torresSeleccionadas: new Set(),
-  torresQa: {}, // { 'QA': true, 'FULLSTACK': false, ... }
+  incluirQa: true, // toggle global: ¿QA hace parte de la propuesta?
   secs: { entregables:false, perfiles:false, consideraciones:false, fda:false }
 };
 
@@ -1042,13 +1051,45 @@ function parseExcel(buffer, filename){
     const wb = XLSX.read(buffer, { type: 'array' });
     const data = { filename, cliente: '', proyecto: '', torres: [], perfiles: [] };
 
-    // Hoja Estimación → cliente y proyecto (col 0 = label, col 1 = valor)
+    // Hoja Estimación → cliente, proyecto + FDA por torre (col K = "Fuera Del Alcance")
     if(wb.SheetNames.includes('Estimación')){
+      const ESTIMACION_TORRE_MAP = {
+        'Full Stack':    'FULLSTACK / DESARROLLO',
+        'Data':          'DATOS',
+        'IA':            'IA',
+        'Portales':      'PORTALES',
+        'Integración':   'INTEGRACIÓN',
+        'Integracion':   'INTEGRACIÓN',
+        'DevOps':        'DEVOPS',
+        'RPA':           'RPA',
+        'Cyberseguridad':'CIBERSEGURIDAD',
+        'QA':            'QA',
+        'Arquitectura':  'ARQUITECTURA',
+        'Mobile':        'MOBILE',
+        'SAP':           'SAP',
+        'PMO':           'PMO',
+      };
       const rows = XLSX.utils.sheet_to_json(wb.Sheets['Estimación'], { header:1, defval:null });
+      let currentTorre = null;
+      data.fda = {};
       for(const row of rows){
-        if(row[0]==='CLIENTE:' && row[1])  data.cliente  = String(row[1]).trim();
-        if(row[0]==='PROYECTO:' && row[1]) data.proyecto = String(row[1]).trim();
-        if(data.cliente && data.proyecto) break;
+        const cell0 = row[0] != null ? String(row[0]).trim() : '';
+        if(cell0 === 'CLIENTE:'  && row[1]) data.cliente  = String(row[1]).trim();
+        if(cell0 === 'PROYECTO:' && row[1]) data.proyecto = String(row[1]).trim();
+        // Detectar encabezado de sección de torre: "Estimacion TORRE X - Persona"
+        if(/^estimacion\s+torre\s+/i.test(cell0)){
+          const torreRaw = cell0.replace(/^estimacion\s+torre\s+/i,'').replace(/\s*[-–]\s*.+$/,'').trim();
+          currentTorre = ESTIMACION_TORRE_MAP[torreRaw] || torreRaw.toUpperCase();
+          continue;
+        }
+        // Leer ítems FDA de col K (índice 10) en filas de datos de cada torre
+        if(currentTorre){
+          const fdaItem = row[10] != null ? String(row[10]).trim() : '';
+          if(fdaItem && !/^fuera\s+del\s+alcance/i.test(fdaItem)){
+            if(!data.fda[currentTorre]) data.fda[currentTorre] = [];
+            data.fda[currentTorre].push(fdaItem);
+          }
+        }
       }
     }
 
@@ -1169,35 +1210,22 @@ function renderPaso2(data){
 
 function toggleTorreSel(t){
   S.torresSeleccionadas.has(t) ? S.torresSeleccionadas.delete(t) : S.torresSeleccionadas.add(t);
-  if(!S.torresSeleccionadas.has(t)) delete S.torresQa[t];
-  else S.torresQa[t] = true; // QA activado por defecto
   if(S.excelData) renderPaso2(S.excelData);
 }
 
-function toggleQaTorre(t){
-  S.torresQa[t] = !S.torresQa[t];
+function toggleQaGlobal(){
+  S.incluirQa = !S.incluirQa;
   renderQaPanel();
 }
 
 function renderQaPanel(){
   const panel = document.getElementById('qa-por-torre');
-  const list  = document.getElementById('qa-torres-list');
   if(S.torresSeleccionadas.size === 0){ panel.style.display = 'none'; return; }
   panel.style.display = 'block';
-  list.innerHTML = [...S.torresSeleccionadas].map(t => {
-    const on = S.torresQa[t] !== false;
-    return `
-      <div class="qa-row">
-        <div class="qa-row-left">
-          <span class="qa-row-icon">${TORRE_ICONS[t] || '🏗️'}</span>
-          <span>${t}</span>
-        </div>
-        <div class="qa-toggle" onclick="toggleQaTorre('${t.replace(/'/g,"\\'")}')">
-          <div class="qa-toggle-track ${on ? 'on' : ''}"></div>
-          <span class="qa-toggle-label">${on ? 'Con QA' : 'Sin QA'}</span>
-        </div>
-      </div>`;
-  }).join('');
+  const track = document.getElementById('qa-global-track');
+  const label = document.getElementById('qa-global-label');
+  if(track) track.className = `qa-toggle-track ${S.incluirQa ? 'on' : ''}`;
+  if(label) label.textContent = S.incluirQa ? 'Sí incluye QA' : 'No incluye QA';
 }
 
 function clearFile(e){
@@ -1289,7 +1317,7 @@ async function doGenerate(){
     filial:               S.filial,
     excel_data:           S.excelData,
     torres_seleccionadas: [...S.torresSeleccionadas],
-    torres_qa:            S.torresQa,
+    incluir_qa:           S.incluirQa,
     opciones:             S.secs,
     entregables:          [],
     consideraciones:      []

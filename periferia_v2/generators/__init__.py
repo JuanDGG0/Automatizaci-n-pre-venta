@@ -25,7 +25,7 @@ def generate(config, out_dir):
         filial: 'corp' | 'group' | 'cbit',
         excel_data: { torres: [...], perfiles: [...], cliente: str, proyecto: str },
         torres_seleccionadas: [...],   # si excel vacío
-        torres_qa: { 'TORRE': True/False },
+        incluir_qa: True | False,          # ¿QA hace parte de esta propuesta?
         opciones: {
             perfiles: 'excel' | 'genericos',
             fda: 'excel' | 'genericos',
