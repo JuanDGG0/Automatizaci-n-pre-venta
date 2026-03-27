@@ -1042,30 +1042,41 @@ function parseExcel(buffer, filename){
     const wb = XLSX.read(buffer, { type: 'array' });
     const data = { filename, cliente: '', proyecto: '', torres: [], perfiles: [], consideraciones: [] };
 
-    // Hoja Estimación → cliente y proyecto (col 0 = label, col 1 = valor)
-if(wb.SheetNames.includes('Estimación')){
-  const rows = XLSX.utils.sheet_to_json(wb.Sheets['Estimación'], { header:1, defval:null });
-  const cons = [];
-  for(const row of rows){
-    const cell = row[9];
-    if(!cell) continue;
-    const texto = String(cell).trim();
-    if(!texto || texto === 'Consideraciones' || texto === 'Adicionales') continue;
-
-    const lineas = texto.split('\n')
-      .map(l => l.trim())
-      .filter(l => l.length > 0)
-      .filter(l => !/^(Riesgos|Consideraciones|Adicionales)\s*:?\s*$/i.test(l))
-      .map(l => l.replace(/^\d+[\.\-]\s*/, '').trim())
-      .filter(l => l.length > 10);
-
-    for(const linea of lineas){
-      if(!cons.includes(linea)) cons.push(linea);
-      // ← sin break por cantidad, dejar que Python pagine
+    // Hoja RESUMEN → cliente en B7
+    if(wb.SheetNames.includes('RESUMEN')){
+      const cell = wb.Sheets['RESUMEN']['B7'];
+      if(cell && cell.v) data.cliente = String(cell.v).trim();
     }
-  }
-  data.consideraciones = cons;
-}
+
+    // Hoja Estimación → proyecto + consideraciones (columna J, índice 9)
+    if(wb.SheetNames.includes('Estimación')){
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets['Estimación'], { header:1, defval:null });
+      const cons = [];
+
+      for(const row of rows){
+        // Proyecto desde columna A/B
+        if(row[0] === 'PROYECTO:' && row[1]) data.proyecto = String(row[1]).trim();
+
+        // Consideraciones desde columna J (índice 9)
+        const cell = row[9];
+        if(!cell) continue;
+        const texto = String(cell).trim();
+        if(!texto || texto === 'Consideraciones' || texto === 'Adicionales') continue;
+
+        const lineas = texto.split('\n')
+          .map(l => l.trim())
+          .filter(l => l.length > 0)
+          .filter(l => !/^(Riesgos|Consideraciones|Adicionales)\s*:?\s*$/i.test(l))
+          .map(l => l.replace(/^\d+[\.\-]\s*/, '').trim())
+          .filter(l => l.length > 10);
+
+        for(const linea of lineas){
+          if(!cons.includes(linea)) cons.push(linea);
+        }
+      }
+
+      data.consideraciones = cons;
+    }
 
     // Hoja RESUMEN → torres — columna 1 tiene los nombres, columna 2 las horas
     // Mapa de nombres del RESUMEN a nombres canónicos (deben coincidir con TORRES_ALL
