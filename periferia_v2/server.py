@@ -7,6 +7,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from generators import generate
+from generators.fda_perfiles import _load_generales
 
 PROJECT_PATH = Path(__file__).resolve().parent
 STATIC_PATH  = PROJECT_PATH / 'static'
@@ -43,6 +44,20 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split('?')[0]
         if path == '/':
             path = '/home.html'
+
+        # Catálogo de perfiles para el buscador del frontend
+        if path == '/api/perfiles-catalog':
+            try:
+                _, perf_db = _load_generales()
+                perfiles = [
+                    {'torre': torre, 'rol': p['rol'], 'desc': p['desc']}
+                    for torre, profs in perf_db.items()
+                    for p in profs
+                ]
+                self._send_json({'ok': True, 'perfiles': perfiles})
+            except Exception as e:
+                self._send_json({'ok': False, 'error': str(e)}, 500)
+            return
 
         file_path = STATIC_PATH / path.lstrip('/')
 

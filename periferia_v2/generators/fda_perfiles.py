@@ -74,6 +74,9 @@ CLAUSULA_GENERAL = [
     'No incluye infraestructura productiva ni ambientes no definidos en el alcance.',
 ]
 
+# Texto que se muestra (en negrita) cuando no hay descripción en el catálogo
+_NO_CATALOG_DESC = 'No encontramos este perfil en la base de datos'
+
 # Máx. caracteres de descripción por tarjeta de perfil (evita desbordamiento)
 DESC_MAX_CHARS = 200
 
@@ -91,6 +94,171 @@ def _esc(t):
     return (t or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
+def _even_chunks(items, max_per=6):
+    """
+    Divide items en chunks distribuidos uniformemente (máx max_per por chunk).
+    Ej: 7 → [4, 3]  |  13 → [5, 4, 4]  |  6 → [6]  |  1 → [1]
+    """
+    total = len(items)
+    if not total:
+        return [[]]
+    n = -(-total // max_per)   # ceil(total / max_per)
+    base, rem = divmod(total, n)
+    chunks, idx = [], 0
+    for i in range(n):
+        size = base + (1 if i < rem else 0)
+        chunks.append(items[idx: idx + size])
+        idx += size
+    return chunks
+
+
+def _set_bullet_shapes(root, items):
+    """
+    Rellena los grupos bullet del slide FDA con los ítems dados.
+    Cada bullet es un grpSp (Grupo 9, 12, 18…) cuyo y en grpSpPr lo posiciona.
+    Si hay más de 6 ítems, clona grupos y los inserta con el mismo espaciado.
+    Si hay menos de 6, oculta los grupos sobrantes.
+    """
+    # Mapear BULLET_RECT name → grpSp que lo contiene
+    name_to_grp = {}
+    for sp in root.iter(f'{{{P}}}sp'):
+        nvpr = sp.find(f'.//{{{P}}}cNvPr')
+        if nvpr is None:
+            continue
+        n = nvpr.attrib.get('name', '')
+        if n in BULLET_RECTS:
+            parent = sp.getparent()
+            if parent is not None and parent.tag == f'{{{P}}}grpSp':
+                name_to_grp[n] = parent
+
+    base_grps = [name_to_grp[n] for n in BULLET_RECTS if n in name_to_grp]
+    if not base_grps:
+        return
+
+    n_items = len(items)
+    n_base  = len(base_grps)
+
+    # Leer/escribir y del grupo en grpSpPr > a:xfrm > a:off
+    def _grp_y(grp):
+        grpSpPr = grp.find(f'{{{P}}}grpSpPr')
+        if grpSpPr is None:
+            return None
+        xfrm = grpSpPr.find(f'{{{A}}}xfrm')
+        if xfrm is None:
+            return None
+        off = xfrm.find(f'{{{A}}}off')
+        return int(off.attrib.get('y', 0)) if off is not None else None
+
+    def _set_grp_y(grp, new_y):
+        grpSpPr = grp.find(f'{{{P}}}grpSpPr')
+        if grpSpPr is None:
+            return
+        xfrm = grpSpPr.find(f'{{{A}}}xfrm')
+        if xfrm is None:
+            return
+        off = xfrm.find(f'{{{A}}}off')
+        if off is not None:
+            off.attrib['y'] = str(new_y)
+
+    def _fill_grp(grp, text):
+        for sp in grp:
+            if sp.tag != f'{{{P}}}sp':
+                continue
+            nvpr = sp.find(f'.//{{{P}}}cNvPr')
+            if nvpr is not None and nvpr.attrib.get('name') in BULLET_RECTS:
+                txb = sp.find(f'{{{P}}}txBody')
+                if txb is not None:
+                    all_t = txb.findall(f'.//{{{A}}}t')
+                    if all_t:
+                        all_t[0].text = text
+                        for t in all_t[1:]:
+                            t.text = ''
+
+    def _hide_grp(grp):
+        for sp in grp:
+            if sp.tag == f'{{{P}}}sp':
+                _hide_shape(sp)
+
+    ys = [_grp_y(g) for g in base_grps]
+    if any(y is None for y in ys):
+        # Fallback: solo rellenar/ocultar sin mover
+        for i, grp in enumerate(base_grps):
+            if i < n_items:
+                _fill_grp(grp, items[i])
+            else:
+                _hide_grp(grp)
+        return
+
+    # Espaciado promedio entre grupos consecutivos
+    gaps    = [ys[i+1] - ys[i] for i in range(len(ys) - 1)]
+    avg_gap = sum(gaps) // len(gaps) if gaps else 400000
+
+    if n_items <= n_base:
+        for i, grp in enumerate(base_grps):
+            if i < n_items:
+                _fill_grp(grp, items[i])
+            else:
+                _hide_grp(grp)
+        return
+
+    # Clonar grupos extra redistribuyendo TODOS dentro del bounding box original
+    def _grp_cy(grp):
+        grpSpPr = grp.find(f'{{{P}}}grpSpPr')
+        if grpSpPr is None:
+            return None
+        xfrm = grpSpPr.find(f'{{{A}}}xfrm')
+        if xfrm is None:
+            return None
+        ext = xfrm.find(f'{{{A}}}ext')
+        return int(ext.attrib.get('cy', 0)) if ext is not None else None
+
+    group_cy   = _grp_cy(base_grps[0]) or avg_gap
+    y_top      = ys[0]
+    total_span = (ys[-1] + group_cy) - y_top   # altura total del bbox original
+
+    all_grps = list(base_grps)
+    next_id  = 9000
+
+    for i in range(n_items - n_base):
+        new_grp = copy.deepcopy(base_grps[0])
+        for el in new_grp.iter(f'{{{P}}}cNvPr'):
+            el.attrib['id'] = str(next_id)
+            next_id += 1
+        all_grps[-1].addnext(new_grp)
+        all_grps.append(new_grp)
+
+    # Redistribuir uniformemente dentro del bbox original
+    N    = len(all_grps)
+    step = (total_span - group_cy) / (N - 1) if N > 1 else 0
+    for i, grp in enumerate(all_grps):
+        _set_grp_y(grp, y_top + int(i * step))
+        _fill_grp(grp, items[i])
+
+
+def _find_desc_in_catalog(rol, perf_db):
+    """
+    Busca la descripción más cercana para un rol en el catálogo de perfiles.
+    Prioridad: coincidencia exacta (normalizada) → coincidencia parcial → ''.
+    """
+    rol_norm = _norm(rol)
+    best_desc = ''
+    for torre_perfiles in perf_db.values():
+        for p in torre_perfiles:
+            p_norm = _norm(p['rol'])
+            if p_norm == rol_norm:
+                return p['desc']
+            if not best_desc and (rol_norm in p_norm or p_norm in rol_norm):
+                best_desc = p['desc']
+    return best_desc
+
+
+def _split_fda(cell_value):
+    """Divide una celda de Excel en ítems FDA individuales usando '.' como separador."""
+    raw = str(cell_value).strip()
+    parts = [p.strip() for p in raw.split('.')]
+    return [p + '.' for p in parts if p]
+
+
 def _load_generales():
     """Carga el Excel de generales y retorna dicts por hoja."""
     if not GENERALES.exists():
@@ -105,9 +273,9 @@ def _load_generales():
         if row[0] and str(row[0]).strip() and str(row[0]).strip() != 'Torre':
             torre_actual = _norm(str(row[0]).strip())
             if row[1]:
-                fda_db.setdefault(torre_actual, []).append(str(row[1]).strip())
+                fda_db.setdefault(torre_actual, []).extend(_split_fda(row[1]))
         elif row[0] is None and row[1] and torre_actual:
-            fda_db.setdefault(torre_actual, []).append(str(row[1]).strip())
+            fda_db.setdefault(torre_actual, []).extend(_split_fda(row[1]))
 
     # Perfiles por torre
     perf_db = {}
@@ -473,7 +641,10 @@ def _edit_perfiles_slide(xml_bytes, perfiles):
             if sp_desc is not None:
                 txb = sp_desc.find(f'{{{P}}}txBody')
                 if txb is not None:
-                    desc_text = _truncate_to_sentences((p['desc'] or '').strip())
+                    desc_bold = p.get('desc_bold', False)
+                    raw_desc  = (p['desc'] or '').strip()
+                    # No truncar el placeholder "no encontrado"
+                    desc_text = raw_desc if desc_bold else _truncate_to_sentences(raw_desc)
                     lines = [l for l in desc_text.split('\n') if l.strip()] or ['']
                     paras = txb.findall(f'{{{A}}}p')
                     template_para = paras[0] if paras else None
@@ -481,10 +652,20 @@ def _edit_perfiles_slide(xml_bytes, perfiles):
                         txb.remove(para)
                     for line in lines:
                         if template_para is not None:
-                            txb.append(_build_para_from_template(template_para, line))
+                            new_para = _build_para_from_template(template_para, line)
+                            if desc_bold:
+                                for r in new_para.findall(f'{{{A}}}r'):
+                                    rPr = r.find(f'{{{A}}}rPr')
+                                    if rPr is None:
+                                        rPr = etree.Element(f'{{{A}}}rPr')
+                                        r.insert(0, rPr)
+                                    rPr.set('b', '1')
+                            txb.append(new_para)
                         else:
-                            p_xml = (f'<a:p xmlns:a="{A}">'
-                                     f'<a:r><a:t>{_esc(line)}</a:t></a:r></a:p>')
+                            bold_attr = ' b="1"' if desc_bold else ''
+                            p_xml = (f'<a:p xmlns:a="{A}"><a:r>'
+                                     f'<a:rPr{bold_attr}/>'
+                                     f'<a:t>{_esc(line)}</a:t></a:r></a:p>')
                             txb.append(etree.fromstring(p_xml))
                     _normalize_bodyPr(txb)
         else:
@@ -546,9 +727,10 @@ def _fill_qa_card(sp, lines):
         etree.SubElement(bodyPr, f'{{{A}}}spAutoFit')
 
 
-def _edit_fda_slide(xml_bytes, torres, fda_db, usar_genericos=True, incluir_qa=True):
+def _edit_fda_slide(xml_bytes, torres, fda_db, usar_genericos=True, incluir_qa=True, items_override=None):
     """
     Edita el slide FDA.
+    - items_override: lista de ítems a mostrar directamente (para paginación)
     - usar_genericos=True  (pill ON):  cláusula general siempre
     - usar_genericos=False (pill OFF): ítems específicos de cada torre activa
 
@@ -561,7 +743,9 @@ def _edit_fda_slide(xml_bytes, torres, fda_db, usar_genericos=True, incluir_qa=T
     torres_norm = [_norm(t) for t in torres]
 
     # ── Ítems columna principal FDA ──────────────────────────────────────────
-    if usar_genericos:
+    if items_override is not None:
+        items = items_override
+    elif usar_genericos:
         items = CLAUSULA_GENERAL[:6]
     elif len(torres) == 1:
         torre_key = torres_norm[0]
@@ -584,8 +768,6 @@ def _edit_fda_slide(xml_bytes, torres, fda_db, usar_genericos=True, incluir_qa=T
             for it in tower_items:
                 if it not in items:
                     items.append(it)
-            if len(items) >= 6:
-                break
         items = items[:6] if items else CLAUSULA_GENERAL[:6]
 
     # ── Ítems panel QA ───────────────────────────────────────────────────────
@@ -600,27 +782,15 @@ def _edit_fda_slide(xml_bytes, torres, fda_db, usar_genericos=True, incluir_qa=T
     else:
         qa_lines = ['Las pruebas de calidad no hacen parte de esta propuesta.']
 
+    _set_bullet_shapes(root, items)
+
     for sp in root.iter(f'{{{P}}}sp'):
         nvpr = sp.find(f'.//{{{P}}}cNvPr')
         if nvpr is None:
             continue
         name = nvpr.attrib.get('name', '')
 
-        if name in BULLET_RECTS:
-            idx = BULLET_RECTS.index(name)
-            txb = sp.find(f'{{{P}}}txBody')
-            if txb is None:
-                continue
-            if idx < len(items):
-                all_t = txb.findall(f'.//{{{A}}}t')
-                if all_t:
-                    all_t[0].text = items[idx]
-                    for t in all_t[1:]:
-                        t.text = ''
-            else:
-                _hide_shape(sp)
-
-        elif name == QA_CARD:
+        if name == QA_CARD:
             # Siempre visible: con ítems QA o con mensaje de exclusión
             _fill_qa_card(sp, qa_lines)
 
@@ -790,13 +960,28 @@ def edit(pptx_bytes, config):
     #            o caer a genéricos si no hay datos en Anexos
     usar_genericos = bool(opciones.get('perfiles'))
 
-    if not usar_genericos and excel_perfiles:
-        # Pill OFF + Excel tiene perfiles → usar datos del Excel (Anexos)
+    # perfiles_manuales: elegidos desde el buscador del frontend (excelVacio)
+    perfiles_manuales = config.get('perfiles_manuales') or []
+
+    if perfiles_manuales:
+        # El usuario eligió perfiles específicos desde el buscador → usar esos
         perfiles = [
-            {'rol': p['perfil'], 'desc': (p.get('seniority') or '').strip()}
-            for p in excel_perfiles
-            if p.get('perfil')
+            {'rol': p['rol'], 'desc': (p.get('desc') or '').strip()}
+            for p in perfiles_manuales
+            if p.get('rol')
         ]
+    elif not usar_genericos and excel_perfiles:
+        # Pill OFF + Excel tiene perfiles → solo hay nombre de rol (sin campo descripción)
+        # Buscar la descripción más cercana en el catálogo; si no hay match → placeholder bold
+        perfiles = []
+        for p in excel_perfiles:
+            if not p.get('perfil'):
+                continue
+            catalog_desc = _find_desc_in_catalog(p['perfil'], perf_db)
+            if catalog_desc:
+                perfiles.append({'rol': p['perfil'], 'desc': catalog_desc})
+            else:
+                perfiles.append({'rol': p['perfil'], 'desc': _NO_CATALOG_DESC, 'desc_bold': True})
     else:
         # Pill ON (genéricos) O sin datos en Anexos → traer todos desde perf_db
         perfiles = []
@@ -836,24 +1021,75 @@ def edit(pptx_bytes, config):
     _, fda_slide_key  = _find_slide(slides_order, files_dict, FDA_MARKER)
     _, perf_slide_key = _find_slide(slides_order, files_dict, PERFILES_MARKER)
 
-    # ── Editar slide FDA ────────────────────────────────────────────────────
+    # ── Editar slide(s) FDA ─────────────────────────────────────────────────
     # opciones.fda: true = pill ON = usar genéricos, false = pill OFF = específicos por torre
     usar_genericos_fda = bool(opciones.get('fda', True))
-    incluir_qa = bool(config.get('incluir_qa', True))
 
-    # Si el Excel tiene ítems FDA en la hoja Estimación (col K) y la pill está OFF,
-    # mezclar esos ítems en fda_db (prioridad sobre el catálogo genérico).
-    excel_fda = excel_data.get('fda') or {}
-    if excel_fda and not usar_genericos_fda:
-        fda_db = dict(fda_db)  # copia para no mutar el original
-        for torre_name, items in excel_fda.items():
-            items_limpios = [str(it).strip() for it in (items or []) if str(it).strip()]
-            if items_limpios:
-                fda_db[_norm(torre_name)] = items_limpios
+    # Derivar incluir_qa:
+    # - Si viene explícito en config (tests), usarlo
+    # - Si el frontend envió torres_qa, usar cualquier valor truthy
+    # - Si no, QA solo si la torre QA está activa
+    if 'incluir_qa' in config:
+        incluir_qa = bool(config['incluir_qa'])
+    else:
+        torres_qa_map = config.get('torres_qa', {})
+        incluir_qa = (
+            any(v for v in torres_qa_map.values()) or
+            any(_norm(t) == 'QA' for t in torres_activas)
+        )
 
+    # ── Recolectar ítems FDA ────────────────────────────────────────────────
+    # Prioridad: 1) Pill ON → CLAUSULA_GENERAL (slide único)
+    #            2) Pill OFF + Excel col K tiene ítems → usar esos (multi-slide)
+    #            3) Pill OFF + sin datos Excel → catálogo Generales (cap 6, slide único)
+    excel_fda_list = [str(it).strip() for it in (excel_data.get('fda') or []) if str(it).strip()]
+
+    if usar_genericos_fda:
+        all_fda_items = list(CLAUSULA_GENERAL)
+    elif excel_fda_list:
+        # Datos específicos del Excel de estimación → multi-slide si es necesario
+        all_fda_items = excel_fda_list
+    else:
+        # Sin datos en el Excel → catálogo por torre, máx 6 (slide único)
+        torres_norm_fda = [_norm(t) for t in torres_activas]
+        all_fda_items = []
+        for torre_key in torres_norm_fda:
+            tower_items = fda_db.get(torre_key, [])
+            if not tower_items:
+                for k in fda_db:
+                    if torre_key in k or k in torre_key:
+                        tower_items = fda_db[k]
+                        break
+            for it in tower_items:
+                if it not in all_fda_items:
+                    all_fda_items.append(it)
+        all_fda_items = all_fda_items[:6] if all_fda_items else list(CLAUSULA_GENERAL)
+
+    # Paginar: chunks de 6 ítems por slide
+    # Distribución uniforme, máx 8 por slide — sobrantes se absorben en slides existentes
+    fda_chunks = _even_chunks(all_fda_items, max_per=8)
+
+    print(f'[FDA] Torres activas      : {torres_activas}')
+    print(f'[FDA] Total ítems FDA     : {len(all_fda_items)}')
+    print(f'[FDA] Slides necesarios   : {len(fda_chunks)}')
+
+    fda_template_xml = files_dict[fda_slide_key]
+
+    # Primer slide FDA: editar el original
     files_dict[fda_slide_key] = _edit_fda_slide(
-        files_dict[fda_slide_key], torres_activas, fda_db, usar_genericos_fda, incluir_qa
+        fda_template_xml, torres_activas, fda_db, usar_genericos_fda, incluir_qa,
+        items_override=fda_chunks[0]
     )
+
+    # Slides adicionales: duplicar template limpio e insertar después del anterior
+    prev_fda_path = fda_slide_key
+    for chunk in fda_chunks[1:]:
+        new_path = _duplicate_perf_slide(files_dict, fda_slide_key, prev_fda_path)
+        files_dict[new_path] = _edit_fda_slide(
+            fda_template_xml, torres_activas, fda_db, usar_genericos_fda, incluir_qa,
+            items_override=chunk
+        )
+        prev_fda_path = new_path
 
     # ── Editar slide(s) Perfiles ────────────────────────────────────────────
     # Guardar el XML original de la plantilla ANTES de cualquier edición

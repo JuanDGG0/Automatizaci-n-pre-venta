@@ -474,6 +474,45 @@ body::after {
 .torre-sel-chip:hover { border-color: var(--muted); color: var(--text); }
 .torre-sel-chip.on { border-color: var(--g); background: rgba(0,230,118,.08); color: var(--g); }
 
+/* ── SELECTOR DE PERFILES ───────────────────────────────────────── */
+.perfil-search-input {
+  width:100%; padding:10px 14px;
+  background:var(--bg2); border:1.5px solid var(--border2); border-radius:12px;
+  color:var(--white); font-family:'Figtree',sans-serif; font-size:13px; outline:none;
+  transition:border-color .15s;
+}
+.perfil-search-input:focus { border-color:var(--g); }
+.perfil-results-dropdown {
+  display:none; position:absolute; top:calc(100% + 4px); left:0; right:0;
+  background:var(--card); border:1.5px solid var(--border2); border-radius:12px;
+  z-index:200; max-height:220px; overflow-y:auto;
+  box-shadow:0 8px 32px rgba(0,0,0,.5);
+}
+.perfil-result-item {
+  padding:10px 14px; cursor:pointer; border-bottom:1px solid var(--border);
+  transition:background .12s;
+}
+.perfil-result-item:last-child { border-bottom:none; }
+.perfil-result-item:hover { background:var(--card2); }
+.perfil-result-item strong { display:block; font-size:13px; color:var(--white); font-weight:600; }
+.perfil-result-item small  { font-size:11px; color:var(--muted); }
+.perfil-selected-card {
+  display:flex; align-items:center; gap:10px;
+  background:var(--card); border:1px solid var(--border2); border-radius:10px;
+  padding:10px 14px;
+}
+.perfil-selected-card .psc-info { flex:1; }
+.perfil-selected-card .psc-rol  { font-size:13px; font-weight:600; color:var(--white); }
+.perfil-selected-card .psc-desc { font-size:11px; color:var(--muted); margin-top:2px; }
+.perfil-selected-card .psc-rm   { cursor:pointer; color:var(--danger); font-size:18px; line-height:1; padding:0 2px; }
+.perfil-manual-input {
+  width:100%; padding:8px 12px;
+  background:var(--bg2); border:1.5px solid var(--border2); border-radius:10px;
+  color:var(--white); font-family:'Figtree',sans-serif; font-size:12px; outline:none;
+  margin-bottom:8px; transition:border-color .15s;
+}
+.perfil-manual-input:focus { border-color:var(--g); }
+
 /* ── QA TOGGLE POR TORRE ────────────────────────────────────────── */
 .qa-row {
   display: flex;
@@ -669,6 +708,42 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       <div id="qa-por-torre" style="display:none;margin-bottom:24px">
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px">¿Incluir FDA de Pruebas de Calidad (QA) por torre?</div>
         <div id="qa-torres-list" style="display:flex;flex-direction:column;gap:8px"></div>
+      </div>
+
+      <!-- Panel de selección de perfiles (visible cuando hay torres seleccionadas) -->
+      <div id="perfil-mode-panel" style="display:none;margin-bottom:20px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px">¿Cómo quieres elegir los perfiles?</div>
+        <div style="display:flex;gap:8px;margin-bottom:14px">
+          <div class="torre-sel-chip on" id="btn-modo-catalogo" onclick="setModoPerfiles('catalogo')">📚 Catálogo completo</div>
+          <div class="torre-sel-chip" id="btn-modo-manual" onclick="setModoPerfiles('manual')">🔍 Elegir perfiles</div>
+        </div>
+
+        <!-- Panel de búsqueda y selección manual -->
+        <div id="perfil-search-panel" style="display:none">
+          <div style="position:relative;margin-bottom:12px">
+            <input id="perfil-search-input" type="text" class="perfil-search-input"
+              placeholder="Buscar perfil en el catálogo..."
+              oninput="buscarPerfiles(this.value)"
+              autocomplete="off" />
+            <div id="perfil-search-results" class="perfil-results-dropdown"></div>
+          </div>
+
+          <!-- Perfiles seleccionados -->
+          <div id="perfiles-selected" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
+
+          <!-- Formulario de entrada manual -->
+          <div style="background:var(--card2);border:1px solid var(--border2);border-radius:12px;padding:14px">
+            <div style="font-size:11px;color:var(--muted);margin-bottom:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">➕ Agregar manualmente</div>
+            <input id="perfil-manual-rol" type="text" class="perfil-manual-input" placeholder="Nombre del rol..." />
+            <textarea id="perfil-manual-desc" class="perfil-manual-input"
+              placeholder="Descripción (opcional)..."
+              style="resize:none;height:64px;margin-bottom:0"></textarea>
+            <button onclick="agregarPerfilManual()"
+              style="margin-top:8px;padding:7px 18px;background:var(--g);border:none;border-radius:10px;color:#000;font-family:'Syne',sans-serif;font-weight:700;font-size:11px;cursor:pointer;letter-spacing:.04em">
+              Agregar
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="xdetail-card" style="margin-bottom:0">
@@ -963,8 +1038,16 @@ let S = {
   excelData: null,
   torresSeleccionadas: new Set(),
   torresQa: {}, // { 'QA': true, 'FULLSTACK': false, ... }
-  secs: { entregables:false, perfiles:false, consideraciones:false, fda:false }
+  secs: { entregables:false, perfiles:false, consideraciones:false, fda:false },
+  modoPerfiles: 'catalogo',  // 'catalogo' | 'manual'
+  perfilesManuales: [],       // [{rol, desc}]
 };
+
+// Catálogo de perfiles cargado desde el servidor
+let PERF_CATALOG = [];
+fetch('/api/perfiles-catalog').then(r => r.json()).then(d => {
+  if (d.ok) PERF_CATALOG = d.perfiles || [];
+}).catch(() => {});
 
 /* ── NAVIGATION ──────────────────────────────────────────────────── */
 function nextStep(){
@@ -1048,34 +1131,50 @@ function parseExcel(buffer, filename){
       if(cell && cell.v) data.cliente = String(cell.v).trim();
     }
 
-    // Hoja Estimación → proyecto + consideraciones (columna J, índice 9)
+    // Hoja Estimación → proyecto + consideraciones (col J) + FDA (col K)
     if(wb.SheetNames.includes('Estimación')){
       const rows = XLSX.utils.sheet_to_json(wb.Sheets['Estimación'], { header:1, defval:null });
       const cons = [];
+      const fda  = [];
 
       for(const row of rows){
         // Proyecto desde columna A/B
         if(row[0] === 'PROYECTO:' && row[1]) data.proyecto = String(row[1]).trim();
 
         // Consideraciones desde columna J (índice 9)
-        const cell = row[9];
-        if(!cell) continue;
-        const texto = String(cell).trim();
-        if(!texto || texto === 'Consideraciones' || texto === 'Adicionales') continue;
+        const cellJ = row[9];
+        if(cellJ){
+          const texto = String(cellJ).trim();
+          if(texto && texto !== 'Consideraciones' && texto !== 'Adicionales'){
+            const lineas = texto.split('\n')
+              .map(l => l.trim())
+              .filter(l => l.length > 0)
+              .filter(l => !/^(Riesgos|Consideraciones|Adicionales)\s*:?\s*$/i.test(l))
+              .map(l => l.replace(/^\d+[\.\-]\s*/, '').trim())
+              .filter(l => l.length > 10);
+            for(const linea of lineas){
+              if(!cons.includes(linea)) cons.push(linea);
+            }
+          }
+        }
 
-        const lineas = texto.split('\n')
-          .map(l => l.trim())
-          .filter(l => l.length > 0)
-          .filter(l => !/^(Riesgos|Consideraciones|Adicionales)\s*:?\s*$/i.test(l))
-          .map(l => l.replace(/^\d+[\.\-]\s*/, '').trim())
-          .filter(l => l.length > 10);
-
-        for(const linea of lineas){
-          if(!cons.includes(linea)) cons.push(linea);
+        // Fuera del Alcance desde columna K (índice 10)
+        // Cada ítem termina en punto — ése es el separador entre ítems dentro de la celda
+        const cellK = row[10];
+        if(cellK){
+          const texto = String(cellK).trim();
+          if(texto && !/^(Fuera del Alcance|FDA)\s*:?\s*$/i.test(texto)){
+            const partes = texto.split('.').map(p => p.trim()).filter(p => p.length > 5);
+            for(const parte of partes){
+              const item = parte.endsWith('.') ? parte : parte + '.';
+              if(!fda.includes(item)) fda.push(item);
+            }
+          }
         }
       }
 
       data.consideraciones = cons;
+      data.fda = fda;
     }
 
     // Hoja RESUMEN → torres — columna 1 tiene los nombres, columna 2 las horas
@@ -1224,7 +1323,91 @@ function renderQaPanel(){
         </div>
       </div>`;
   }).join('');
+  renderPerfilModePanel();
 }
+
+/* ── SELECTOR DE PERFILES ──────────────────────────────────────────── */
+
+function renderPerfilModePanel(){
+  const panel = document.getElementById('perfil-mode-panel');
+  if (!panel) return;
+  if (S.torresSeleccionadas.size === 0) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  document.getElementById('btn-modo-catalogo').classList.toggle('on', S.modoPerfiles === 'catalogo');
+  document.getElementById('btn-modo-manual').classList.toggle('on',   S.modoPerfiles === 'manual');
+  document.getElementById('perfil-search-panel').style.display = S.modoPerfiles === 'manual' ? 'block' : 'none';
+  if (S.modoPerfiles === 'manual') renderPerfilesSeleccionados();
+}
+
+function setModoPerfiles(modo){
+  S.modoPerfiles = modo;
+  renderPerfilModePanel();
+}
+
+function buscarPerfiles(q){
+  const res = document.getElementById('perfil-search-results');
+  q = q.trim().toLowerCase();
+  if (!q) { res.style.display = 'none'; return; }
+  const matches = PERF_CATALOG.filter(p =>
+    p.rol.toLowerCase().includes(q) || p.torre.toLowerCase().includes(q)
+  ).slice(0, 8);
+  if (!matches.length) { res.style.display = 'none'; return; }
+  res.style.display = 'block';
+  res.innerHTML = matches.map(p => {
+    const data = JSON.stringify(p).replace(/'/g, "\\'");
+    return `<div class="perfil-result-item" onclick='agregarPerfilDesdeResultado(${JSON.stringify(p)})'>
+      <strong>${p.rol}</strong>
+      <small>${TORRE_ICONS[p.torre] || '🏗️'} ${p.torre}</small>
+    </div>`;
+  }).join('');
+}
+
+function agregarPerfilDesdeResultado(p){
+  if (S.perfilesManuales.some(x => x.rol === p.rol)) return;
+  S.perfilesManuales.push({ rol: p.rol, desc: p.desc });
+  document.getElementById('perfil-search-input').value = '';
+  document.getElementById('perfil-search-results').style.display = 'none';
+  renderPerfilesSeleccionados();
+}
+
+function quitarPerfil(idx){
+  S.perfilesManuales.splice(idx, 1);
+  renderPerfilesSeleccionados();
+}
+
+function agregarPerfilManual(){
+  const rol  = document.getElementById('perfil-manual-rol').value.trim();
+  const desc = document.getElementById('perfil-manual-desc').value.trim();
+  if (!rol) return;
+  if (S.perfilesManuales.some(x => x.rol === rol)) return;
+  S.perfilesManuales.push({ rol, desc });
+  document.getElementById('perfil-manual-rol').value  = '';
+  document.getElementById('perfil-manual-desc').value = '';
+  renderPerfilesSeleccionados();
+}
+
+function renderPerfilesSeleccionados(){
+  const container = document.getElementById('perfiles-selected');
+  if (!container) return;
+  if (!S.perfilesManuales.length) { container.innerHTML = ''; return; }
+  container.innerHTML = S.perfilesManuales.map((p, i) => `
+    <div class="perfil-selected-card">
+      <div class="psc-info">
+        <div class="psc-rol">${p.rol}</div>
+        ${p.desc ? `<div class="psc-desc">${p.desc.length > 90 ? p.desc.slice(0,90) + '…' : p.desc}</div>` : ''}
+      </div>
+      <div class="psc-rm" onclick="quitarPerfil(${i})">×</div>
+    </div>
+  `).join('');
+}
+
+// Cerrar dropdown al hacer click fuera
+document.addEventListener('click', e => {
+  const box = document.getElementById('perfil-search-results');
+  if (box && !box.contains(e.target) && e.target.id !== 'perfil-search-input') {
+    box.style.display = 'none';
+  }
+});
 
 function clearFile(e){
   e.stopPropagation(); S.file = null; S.excelData = null; S.excelVacio = false;
@@ -1317,6 +1500,7 @@ async function doGenerate(){
     torres_seleccionadas: [...S.torresSeleccionadas],
     torres_qa:            S.torresQa,
     opciones:             S.secs,
+    perfiles_manuales:    (S.modoPerfiles === 'manual' && S.excelVacio) ? S.perfilesManuales : [],
     entregables:          [],
     consideraciones:      []
   };
