@@ -16,17 +16,15 @@ Lógica:
   - Pill ON: además se agregan los genéricos de Generales_para_todos.xlsx
              filtrados por torre, al final y sin duplicar.
   - Pill OFF: solo las del Excel de estimación.
-  - Máximo 5 consideraciones por slide.
-  - Si el texto supera 3 líneas (~159 chars), el grupo se alarga lo necesario.
-  - Si no supera el límite, el tamaño del grupo NO se toca.
-  - Los grupos se posicionan secuencialmente: cada uno empieza donde termina el anterior.
+  - Máximo 5 consideraciones por slide redistribuyendo posiciones Y.
+  - Gap entre grupos limitado al original del template (no se separan en exceso).
+  - Si hay más de 5, se duplica el slide para las siguientes.
   - Grupos sobrantes se eliminan del XML por completo.
   - El nombre de la filial se renderiza en negrita dentro del texto.
-  - Si hay más de 5 consideraciones, se duplica el slide.
   - Slide localizado por contenido (>= 4 grpSp con SHAPE_NAME), no por índice.
 """
 
-import copy, io, math, re, unicodedata, zipfile
+import copy, io, re, unicodedata, zipfile
 from pathlib import Path
 from lxml import etree
 from openpyxl import load_workbook
@@ -39,25 +37,18 @@ A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 
-SHAPE_NAME = 'Redondear rectángulo de esquina diagonal 14'
+SHAPE_NAME    = 'Redondear rectángulo de esquina diagonal 14'
 
 PLACEHOLDER_CLIENTE = 'XXXXXXXXXX'
 PLACEHOLDER_FILIAL  = 'Filial'
+MAX_POR_SLIDE       = 5   # máximo que cabe redistribuyendo posiciones Y
 
-# Constantes de layout (medidas del template)
-Y_START        = 850000   # Y del primer grupo, debajo del título
-GRUPO_CY_BASE  = 708641   # altura base del grupo externo (EMU)
-SHAPE_CY_BASE  = 831267   # altura base del shape interno (EMU)
-GAP_ORIGINAL   = 162777   # gap entre grupos en el template
+# Constantes de layout para redistribución vertical (calculadas del template)
+Y_START      = 850000   # Y del primer grupo, debajo del título
+Y_END_MAX    = 5050000  # margen inferior del slide
+SLIDE_CY     = 708641   # altura fija de cada grupo (del template)
+GAP_ORIGINAL = 162777   # gap real entre grupos en el template — techo del gap dinámico
 
-GRUPO_CX_NUEVO = 5200000   # era 4158890 en el template
-SHAPE_CX_NUEVO = 5200000   # igual al grupo (cx del shape en coordenadas del grupo)
-
-# Calibración de texto: el placeholder de ~160 chars cabe en 3 líneas en el shape base
-CHARS_POR_LINEA = 69      # chars por línea a 12pt Calibri italic en ese ancho
-LINEAS_BASE     = 3       # líneas que caben en el shape/grupo sin agrandar
-EMU_POR_LINEA   = GRUPO_CY_BASE // LINEAS_BASE  # 236213 EMU por línea
-Y_END_MAX      = 5050000
 FILIAL_NOMBRES = {
     'corp':  'Periferia IT Corp',
     'group': 'Periferia IT Group',
@@ -80,22 +71,12 @@ def _apply_replacements(texto, cliente, filial_nombre):
     return texto
 
 
-def _calc_delta(texto):
-    """
-    Calcula cuánto hay que alargar el grupo (en EMU) para que el texto quepa.
-    Retorna 0 si el texto cabe en las LINEAS_BASE sin agrandar.
-    """
-    lineas = math.ceil(len(texto) / CHARS_POR_LINEA)
-    if lineas <= LINEAS_BASE:
-        return 0
-    return (lineas - LINEAS_BASE) * EMU_POR_LINEA
-
-
 # ═══════════════════════════════ fuentes de datos ════════════════════════════
 
 def _load_desde_excel(excel_consideraciones, cliente, filial_nombre):
     """
-    Carga las consideraciones del Excel de estimación (columna J).
+    Carga las consideraciones del Excel de estimación (columna J),
+    parseadas por el frontend y enviadas en excel_data.consideraciones.
     Se incluyen SIEMPRE, independientemente de la pill.
     """
     if not excel_consideraciones:
@@ -137,8 +118,7 @@ def _load_desde_generales(torres_activas, cliente, filial_nombre):
         if not (col_b and str(col_b).strip() and torre_actual):
             continue
 
-        es_general = torre_actual == 'GENERALES'
-        aplica      = es_general or any(torre_actual in t or t in torre_actual for t in torres_norm)
+        aplica = any(torre_actual in t or t in torre_actual for t in torres_norm)
         if not aplica:
             continue
 
@@ -181,13 +161,9 @@ def _find_grupos(root):
 def _write_text_in_grupo(grpSp, texto, filial_nombre=''):
     """
     Escribe texto en el shape redondeado dentro del grupo.
-    - Pone en negrita el nombre de la filial si aparece en el texto.
-    - Si el texto supera LINEAS_BASE líneas, alarga el grupo y el shape.
-    - Si no supera el límite, NO modifica las dimensiones.
-    Retorna el delta de altura aplicado al grupo (0 si no cambió).
+    Si el texto contiene el nombre de la filial, ese fragmento se renderiza
+    en negrita creando runs separados: [antes][filial bold][después].
     """
-    delta = _calc_delta(texto)
-
     for sp in grpSp.iter(f'{{{P}}}sp'):
         nvpr = sp.find(f'.//{{{P}}}cNvPr')
         if nvpr is None or nvpr.attrib.get('name', '') != SHAPE_NAME:
@@ -225,10 +201,11 @@ def _write_text_in_grupo(grpSp, texto, filial_nombre=''):
             r_el.insert(0, rPr)
             t_el = etree.SubElement(r_el, f'{{{A}}}t')
             t_el.text = txt
+            # Preservar espacios en los extremos
             if txt.startswith(' ') or txt.endswith(' '):
                 t_el.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
 
-        # Negrita en el nombre de la filial
+        # Partir el texto en torno al nombre de la filial para ponerlo en negrita
         if filial_nombre and filial_nombre in texto:
             idx    = texto.index(filial_nombre)
             before = texto[:idx]
@@ -241,32 +218,7 @@ def _write_text_in_grupo(grpSp, texto, filial_nombre=''):
         else:
             _make_run(texto, bold=False)
 
-        # Alargar shape y grupo SOLO si el texto no cabe en el tamaño base
-        if delta > 0:
-            # Alargar shape interno (cy)
-            spPr = sp.find(f'{{{P}}}spPr')
-            if spPr is not None:
-                xfrm = spPr.find(f'{{{A}}}xfrm')
-                if xfrm is not None:
-                    ext = xfrm.find(f'{{{A}}}ext')
-                    if ext is not None:
-                        ext.attrib['cy'] = str(SHAPE_CY_BASE + delta)
-
-            # Alargar grupo externo (ext.cy y chExt.cy)
-            grpSpPr = grpSp.find(f'{{{P}}}grpSpPr')
-            if grpSpPr is not None:
-                xfrm_grp = grpSpPr.find(f'{{{A}}}xfrm')
-                if xfrm_grp is not None:
-                    ext_grp = xfrm_grp.find(f'{{{A}}}ext')
-                    if ext_grp is not None:
-                        ext_grp.attrib['cy'] = str(GRUPO_CY_BASE + delta)
-                    chext = xfrm_grp.find(f'{{{A}}}chExt')
-                    if chext is not None:
-                        chext.attrib['cy'] = str(SHAPE_CY_BASE + delta)
-
-        return delta
-
-    return 0
+        break
 
 
 def _remove_grupo(root, grpSp):
@@ -283,36 +235,7 @@ def _set_grupo_y(grpSp, new_y):
     off     = xfrm.find(f'{{{A}}}off') if xfrm is not None else None
     if off is not None:
         off.attrib['y'] = str(new_y)
-def _set_grupo_cx(grpSp, cx_grupo, cx_shape):
-    """
-    Actualiza el ancho del grupo externo y del shape interno.
-    Modifica: grpSpPr ext.cx, grpSpPr chExt.cx, spPr ext.cx del shape.
-    """
-    # Ancho del grupo externo
-    grpSpPr = grpSp.find(f'{{{P}}}grpSpPr')
-    if grpSpPr is not None:
-        xfrm = grpSpPr.find(f'{{{A}}}xfrm')
-        if xfrm is not None:
-            ext = xfrm.find(f'{{{A}}}ext')
-            if ext is not None:
-                ext.attrib['cx'] = str(cx_grupo)
-            chext = xfrm.find(f'{{{A}}}chExt')
-            if chext is not None:
-                chext.attrib['cx'] = str(cx_shape)
 
-    # Ancho del shape interno
-    for sp in grpSp.iter(f'{{{P}}}sp'):
-        nvpr = sp.find(f'.//{{{P}}}cNvPr')
-        if nvpr is None or nvpr.attrib.get('name', '') != SHAPE_NAME:
-            continue
-        spPr = sp.find(f'{{{P}}}spPr')
-        if spPr is not None:
-            xfrm = spPr.find(f'{{{A}}}xfrm')
-            if xfrm is not None:
-                ext = xfrm.find(f'{{{A}}}ext')
-                if ext is not None:
-                    ext.attrib['cx'] = str(cx_shape)
-        break
 
 # ═══════════════════════════════ localización y duplicación de slide ══════════
 
@@ -358,6 +281,7 @@ def _find_cons_slide(slides_order, files_dict):
 def _duplicate_slide(files_dict, src_path, insert_after_path):
     """
     Duplica src_path e inserta la copia justo después de insert_after_path.
+    Mismo patrón que fda_perfiles._duplicate_perf_slide.
     Retorna el path del nuevo slide.
     """
     NS_REL   = 'http://schemas.openxmlformats.org/package/2006/relationships'
@@ -372,6 +296,7 @@ def _duplicate_slide(files_dict, src_path, insert_after_path):
     new_slide_path = f'ppt/slides/slide{new_num}.xml'
     files_dict[new_slide_path] = files_dict[src_path]
 
+    # Content_Types
     CT_NS   = 'http://schemas.openxmlformats.org/package/2006/content-types'
     ct_root = etree.fromstring(files_dict['[Content_Types].xml'])
     etree.SubElement(ct_root, f'{{{CT_NS}}}Override', {
@@ -381,6 +306,7 @@ def _duplicate_slide(files_dict, src_path, insert_after_path):
     files_dict['[Content_Types].xml'] = etree.tostring(
         ct_root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
+    # Rels del slide
     def _rels_path(p):
         parts = p.rsplit('/', 1)
         return f"{parts[0]}/_rels/{parts[1]}.rels"
@@ -395,6 +321,7 @@ def _duplicate_slide(files_dict, src_path, insert_after_path):
         files_dict[new_rels] = etree.tostring(
             rels_root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
+    # presentation.xml.rels
     prs_rels_path = 'ppt/_rels/presentation.xml.rels'
     prs_rels_root = etree.fromstring(files_dict[prs_rels_path])
 
@@ -420,6 +347,7 @@ def _duplicate_slide(files_dict, src_path, insert_after_path):
     files_dict[prs_rels_path] = etree.tostring(
         prs_rels_root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
+    # presentation.xml sldIdLst
     prs_root = etree.fromstring(files_dict['ppt/presentation.xml'])
     sldIdLst = prs_root.find(f'.//{{{P}}}sldIdLst')
     max_id   = max(int(s.attrib['id']) for s in sldIdLst)
@@ -450,14 +378,13 @@ def _duplicate_slide(files_dict, src_path, insert_after_path):
 def _edit_cons_slide(xml_bytes, chunk, filial_nombre=''):
     """
     Edita un slide con 1–5 consideraciones.
-    - Si hay 5, duplica el último grupo del template.
-    - Posiciona grupos secuencialmente: cada uno arranca donde termina el anterior + GAP_ORIGINAL.
-    - Los grupos con texto largo se alargan; los siguientes se desplazan automáticamente.
-    - Los grupos con texto corto NO se modifican en tamaño.
-    - Elimina grupos sobrantes.
+    - Si hay 5 y el template solo tiene 4 grupos, duplica el último.
+    - Redistribuye posiciones Y con gap dinámico, limitado a GAP_ORIGINAL.
+    - Escribe texto con negrita en la filial, sin tocar color ni estilo.
+    - Elimina grupos sobrantes si hay menos de 4.
     """
     root   = etree.fromstring(xml_bytes)
-    grupos = _find_grupos(root)
+    grupos = _find_grupos(root)  # 4 grupos del template, ordenados por Y
 
     n_cons = len(chunk)
 
@@ -465,6 +392,7 @@ def _edit_cons_slide(xml_bytes, chunk, filial_nombre=''):
     if n_cons > len(grupos):
         template_grp = grupos[-1]
         new_grp      = copy.deepcopy(template_grp)
+        # Solo reasignar IDs numéricos — ignorar GUIDs
         existing_ids = [
             int(el.attrib['id'])
             for el in root.iter()
@@ -480,15 +408,18 @@ def _edit_cons_slide(xml_bytes, chunk, filial_nombre=''):
             spTree.append(new_grp)
         grupos.append(new_grp)
 
-    # Posicionamiento secuencial: el Y de cada grupo depende del cy real del anterior
-    current_y = Y_START
+    # Gap dinámico limitado al original del template — evita separación excesiva
+    # cuando hay pocos grupos (ej. 1 o 2 en el último slide)
+    if n_cons > 1:
+        gap_dinamico = (Y_END_MAX - Y_START - n_cons * SLIDE_CY) // (n_cons - 1)
+        gap = min(gap_dinamico, GAP_ORIGINAL)
+    else:
+        gap = 0
 
     for i, grpSp in enumerate(grupos):
         if i < n_cons:
-            _set_grupo_y(grpSp, current_y)
-            _set_grupo_cx(grpSp, GRUPO_CX_NUEVO, SHAPE_CX_NUEVO)  # ← agregar esta línea
-            delta = _write_text_in_grupo(grpSp, chunk[i], filial_nombre)
-            current_y += GRUPO_CY_BASE + delta + GAP_ORIGINAL
+            _set_grupo_y(grpSp, Y_START + i * (SLIDE_CY + gap))
+            _write_text_in_grupo(grpSp, chunk[i], filial_nombre)
         else:
             _remove_grupo(root, grpSp)
 
@@ -496,40 +427,6 @@ def _edit_cons_slide(xml_bytes, chunk, filial_nombre=''):
 
 
 # ═══════════════════════════════ entry point ═════════════════════════════════
-def _split_en_slides(consideraciones):
-    """
-    Divide las consideraciones en grupos que caben en cada slide.
-    En vez de un tamaño fijo, calcula cuántas caben acumulando alturas reales.
-    Una consideración cabe si su bottom (current_y + cy_grupo) <= Y_END_MAX.
-    """
-    slides   = []
-    restantes = list(consideraciones)
-
-    while restantes:
-        grupo_actual = []
-        current_y    = Y_START
-
-        for texto in restantes:
-            delta    = _calc_delta(texto)
-            cy_grupo = GRUPO_CY_BASE + delta
-            bottom   = current_y + cy_grupo
-
-            if bottom > Y_END_MAX and grupo_actual:
-                # No cabe — cortar aquí
-                break
-
-            grupo_actual.append(texto)
-            current_y += cy_grupo + GAP_ORIGINAL
-
-        if not grupo_actual:
-            # Caso extremo: un texto solo que ya es más alto que el slide
-            # Incluirlo de todas formas para no perderlo
-            grupo_actual = [restantes[0]]
-
-        slides.append(grupo_actual)
-        restantes = restantes[len(grupo_actual):]
-
-    return slides if slides else [[]]
 
 def edit(pptx_bytes, config):
     """
@@ -575,8 +472,11 @@ def edit(pptx_bytes, config):
 
     print(f'[CONSIDERACIONES] Total           : {len(consideraciones)}')
 
-    chunks = _split_en_slides(consideraciones) if consideraciones else [[]]
+    # Paginar en chunks de MAX_POR_SLIDE (5 — redistribuye posiciones Y)
+    chunks = [consideraciones[i:i+MAX_POR_SLIDE]
+              for i in range(0, max(len(consideraciones), 1), MAX_POR_SLIDE)]
 
+    # Cargar archivos del PPTX
     files_dict = {}
     with zipfile.ZipFile(io.BytesIO(pptx_bytes)) as zin:
         files_dict = {name: zin.read(name) for name in zin.namelist()}
@@ -585,14 +485,17 @@ def edit(pptx_bytes, config):
     cons_slide_key = _find_cons_slide(slides_order, files_dict)
     template_xml   = files_dict[cons_slide_key]
 
+    # Editar el primer slide
     files_dict[cons_slide_key] = _edit_cons_slide(template_xml, chunks[0], filial_nombre)
 
+    # Duplicar para slides adicionales si hay más de MAX_POR_SLIDE
     prev_path = cons_slide_key
     for chunk in chunks[1:]:
         new_path = _duplicate_slide(files_dict, cons_slide_key, prev_path)
         files_dict[new_path] = _edit_cons_slide(template_xml, chunk, filial_nombre)
         prev_path = new_path
 
+    # Reconstruir ZIP
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zout:
         for name, data in files_dict.items():
