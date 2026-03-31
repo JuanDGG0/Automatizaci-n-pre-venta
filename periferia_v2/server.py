@@ -3,6 +3,7 @@ import base64
 import traceback
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -18,6 +19,10 @@ MIME_TYPES = {
     '.png':  'image/png',
     '.ico':  'image/x-icon',
 }
+
+# 🔥 Servidor multihilo (evita bloqueos)
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True  # mata threads al cerrar
 
 class Handler(BaseHTTPRequestHandler):
 
@@ -39,7 +44,6 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({}, 200)
 
     def do_GET(self):
-        # Redirigir / → /home.html
         path = self.path.split('?')[0]
         if path == '/':
             path = '/home.html'
@@ -100,8 +104,18 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    server = HTTPServer(('0.0.0.0', 8090), Handler)
+    server = ThreadedHTTPServer(('0.0.0.0', 8090), Handler)
+    server.allow_reuse_address = True
+
     print('Servidor listo en:')
-    print('  → http://localhost:8090        (abre el frontend)')
-    print('  → http://localhost:8090/generate  (endpoint del generador)')
-    server.serve_forever()
+    print('  → http://localhost:8090')
+    print('  → http://localhost:8090/generate')
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print('\n[OK] Cerrando servidor...')
+        server.shutdown()   # 🔑 clave para cerrar correctamente
+    finally:
+        server.server_close()
+        print('[OK] Servidor detenido.')
