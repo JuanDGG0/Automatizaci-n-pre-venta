@@ -43,7 +43,6 @@ SHAPE_NAME = 'Redondear rectángulo de esquina diagonal 14'
 
 PLACEHOLDER_CLIENTE = 'XXXXXXXXXX'
 PLACEHOLDER_FILIAL  = 'Filial'
-MAX_POR_SLIDE       = 5
 
 # Constantes de layout (medidas del template)
 Y_START        = 850000   # Y del primer grupo, debajo del título
@@ -51,11 +50,14 @@ GRUPO_CY_BASE  = 708641   # altura base del grupo externo (EMU)
 SHAPE_CY_BASE  = 831267   # altura base del shape interno (EMU)
 GAP_ORIGINAL   = 162777   # gap entre grupos en el template
 
+GRUPO_CX_NUEVO = 5200000   # era 4158890 en el template
+SHAPE_CX_NUEVO = 5200000   # igual al grupo (cx del shape en coordenadas del grupo)
+
 # Calibración de texto: el placeholder de ~160 chars cabe en 3 líneas en el shape base
-CHARS_POR_LINEA = 53      # chars por línea a 12pt Calibri italic en ese ancho
+CHARS_POR_LINEA = 69      # chars por línea a 12pt Calibri italic en ese ancho
 LINEAS_BASE     = 3       # líneas que caben en el shape/grupo sin agrandar
 EMU_POR_LINEA   = GRUPO_CY_BASE // LINEAS_BASE  # 236213 EMU por línea
-
+Y_END_MAX      = 5050000
 FILIAL_NOMBRES = {
     'corp':  'Periferia IT Corp',
     'group': 'Periferia IT Group',
@@ -135,7 +137,8 @@ def _load_desde_generales(torres_activas, cliente, filial_nombre):
         if not (col_b and str(col_b).strip() and torre_actual):
             continue
 
-        aplica = any(torre_actual in t or t in torre_actual for t in torres_norm)
+        es_general = torre_actual == 'GENERALES'
+        aplica      = es_general or any(torre_actual in t or t in torre_actual for t in torres_norm)
         if not aplica:
             continue
 
@@ -240,7 +243,7 @@ def _write_text_in_grupo(grpSp, texto, filial_nombre=''):
 
         # Alargar shape y grupo SOLO si el texto no cabe en el tamaño base
         if delta > 0:
-            # Alargar shape interno
+            # Alargar shape interno (cy)
             spPr = sp.find(f'{{{P}}}spPr')
             if spPr is not None:
                 xfrm = spPr.find(f'{{{A}}}xfrm')
@@ -280,7 +283,36 @@ def _set_grupo_y(grpSp, new_y):
     off     = xfrm.find(f'{{{A}}}off') if xfrm is not None else None
     if off is not None:
         off.attrib['y'] = str(new_y)
+def _set_grupo_cx(grpSp, cx_grupo, cx_shape):
+    """
+    Actualiza el ancho del grupo externo y del shape interno.
+    Modifica: grpSpPr ext.cx, grpSpPr chExt.cx, spPr ext.cx del shape.
+    """
+    # Ancho del grupo externo
+    grpSpPr = grpSp.find(f'{{{P}}}grpSpPr')
+    if grpSpPr is not None:
+        xfrm = grpSpPr.find(f'{{{A}}}xfrm')
+        if xfrm is not None:
+            ext = xfrm.find(f'{{{A}}}ext')
+            if ext is not None:
+                ext.attrib['cx'] = str(cx_grupo)
+            chext = xfrm.find(f'{{{A}}}chExt')
+            if chext is not None:
+                chext.attrib['cx'] = str(cx_shape)
 
+    # Ancho del shape interno
+    for sp in grpSp.iter(f'{{{P}}}sp'):
+        nvpr = sp.find(f'.//{{{P}}}cNvPr')
+        if nvpr is None or nvpr.attrib.get('name', '') != SHAPE_NAME:
+            continue
+        spPr = sp.find(f'{{{P}}}spPr')
+        if spPr is not None:
+            xfrm = spPr.find(f'{{{A}}}xfrm')
+            if xfrm is not None:
+                ext = xfrm.find(f'{{{A}}}ext')
+                if ext is not None:
+                    ext.attrib['cx'] = str(cx_shape)
+        break
 
 # ═══════════════════════════════ localización y duplicación de slide ══════════
 
@@ -454,8 +486,8 @@ def _edit_cons_slide(xml_bytes, chunk, filial_nombre=''):
     for i, grpSp in enumerate(grupos):
         if i < n_cons:
             _set_grupo_y(grpSp, current_y)
+            _set_grupo_cx(grpSp, GRUPO_CX_NUEVO, SHAPE_CX_NUEVO)  # ← agregar esta línea
             delta = _write_text_in_grupo(grpSp, chunk[i], filial_nombre)
-            # El siguiente grupo arranca después de este (cy real) + gap
             current_y += GRUPO_CY_BASE + delta + GAP_ORIGINAL
         else:
             _remove_grupo(root, grpSp)
@@ -464,6 +496,40 @@ def _edit_cons_slide(xml_bytes, chunk, filial_nombre=''):
 
 
 # ═══════════════════════════════ entry point ═════════════════════════════════
+def _split_en_slides(consideraciones):
+    """
+    Divide las consideraciones en grupos que caben en cada slide.
+    En vez de un tamaño fijo, calcula cuántas caben acumulando alturas reales.
+    Una consideración cabe si su bottom (current_y + cy_grupo) <= Y_END_MAX.
+    """
+    slides   = []
+    restantes = list(consideraciones)
+
+    while restantes:
+        grupo_actual = []
+        current_y    = Y_START
+
+        for texto in restantes:
+            delta    = _calc_delta(texto)
+            cy_grupo = GRUPO_CY_BASE + delta
+            bottom   = current_y + cy_grupo
+
+            if bottom > Y_END_MAX and grupo_actual:
+                # No cabe — cortar aquí
+                break
+
+            grupo_actual.append(texto)
+            current_y += cy_grupo + GAP_ORIGINAL
+
+        if not grupo_actual:
+            # Caso extremo: un texto solo que ya es más alto que el slide
+            # Incluirlo de todas formas para no perderlo
+            grupo_actual = [restantes[0]]
+
+        slides.append(grupo_actual)
+        restantes = restantes[len(grupo_actual):]
+
+    return slides if slides else [[]]
 
 def edit(pptx_bytes, config):
     """
@@ -509,8 +575,7 @@ def edit(pptx_bytes, config):
 
     print(f'[CONSIDERACIONES] Total           : {len(consideraciones)}')
 
-    chunks = [consideraciones[i:i+MAX_POR_SLIDE]
-              for i in range(0, max(len(consideraciones), 1), MAX_POR_SLIDE)]
+    chunks = _split_en_slides(consideraciones) if consideraciones else [[]]
 
     files_dict = {}
     with zipfile.ZipFile(io.BytesIO(pptx_bytes)) as zin:
