@@ -115,9 +115,9 @@ def _even_chunks(items, max_per=6):
 def _set_bullet_shapes(root, items):
     """
     Rellena los grupos bullet del slide FDA con los ítems dados.
-    Cada bullet es un grpSp (Grupo 9, 12, 18…) cuyo y en grpSpPr lo posiciona.
-    Si hay más de 6 ítems, clona grupos y los inserta con el mismo espaciado.
-    Si hay menos de 6, oculta los grupos sobrantes.
+    - Menos de 6 ítems: elimina los grupos sobrantes y redistribuye los visibles
+      uniformemente dentro del bounding box original.
+    - Más de 6 ítems: clona grupos extra y los redistribuye dentro del mismo bbox.
     """
     # Mapear BULLET_RECT name → grpSp que lo contiene
     name_to_grp = {}
@@ -138,7 +138,7 @@ def _set_bullet_shapes(root, items):
     n_items = len(items)
     n_base  = len(base_grps)
 
-    # Leer/escribir y del grupo en grpSpPr > a:xfrm > a:off
+    # ── Helpers ──────────────────────────────────────────────────────────────
     def _grp_y(grp):
         grpSpPr = grp.find(f'{{{P}}}grpSpPr')
         if grpSpPr is None:
@@ -160,6 +160,16 @@ def _set_bullet_shapes(root, items):
         if off is not None:
             off.attrib['y'] = str(new_y)
 
+    def _grp_cy(grp):
+        grpSpPr = grp.find(f'{{{P}}}grpSpPr')
+        if grpSpPr is None:
+            return None
+        xfrm = grpSpPr.find(f'{{{A}}}xfrm')
+        if xfrm is None:
+            return None
+        ext = xfrm.find(f'{{{A}}}ext')
+        return int(ext.attrib.get('cy', 0)) if ext is not None else None
+
     def _fill_grp(grp, text):
         for sp in grp:
             if sp.tag != f'{{{P}}}sp':
@@ -174,48 +184,46 @@ def _set_bullet_shapes(root, items):
                         for t in all_t[1:]:
                             t.text = ''
 
-    def _hide_grp(grp):
+    def _remove_grp(grp):
         parent = grp.getparent()
         if parent is not None:
             parent.remove(grp)
 
+    # ── Calcular bbox original (usando los 6 grupos del template) ────────────
     ys = [_grp_y(g) for g in base_grps]
     if any(y is None for y in ys):
-        # Fallback: solo rellenar/ocultar sin mover
+        # Fallback sin redistribución
         for i, grp in enumerate(base_grps):
             if i < n_items:
                 _fill_grp(grp, items[i])
             else:
-                _hide_grp(grp)
+                _remove_grp(grp)
         return
 
-    # Espaciado promedio entre grupos consecutivos
     gaps    = [ys[i+1] - ys[i] for i in range(len(ys) - 1)]
     avg_gap = sum(gaps) // len(gaps) if gaps else 400000
-
-    if n_items <= n_base:
-        for i, grp in enumerate(base_grps):
-            if i < n_items:
-                _fill_grp(grp, items[i])
-            else:
-                _hide_grp(grp)
-        return
-
-    # Clonar grupos extra redistribuyendo TODOS dentro del bounding box original
-    def _grp_cy(grp):
-        grpSpPr = grp.find(f'{{{P}}}grpSpPr')
-        if grpSpPr is None:
-            return None
-        xfrm = grpSpPr.find(f'{{{A}}}xfrm')
-        if xfrm is None:
-            return None
-        ext = xfrm.find(f'{{{A}}}ext')
-        return int(ext.attrib.get('cy', 0)) if ext is not None else None
-
     group_cy   = _grp_cy(base_grps[0]) or avg_gap
     y_top      = ys[0]
     total_span = (ys[-1] + group_cy) - y_top   # altura total del bbox original
 
+    # ── Caso: menos o igual de grupos base ───────────────────────────────────
+    if n_items <= n_base:
+        # Eliminar grupos sobrantes
+        for grp in base_grps[n_items:]:
+            _remove_grp(grp)
+
+        visible = base_grps[:n_items]
+        # Redistribuir los visibles uniformemente en el bbox completo
+        if len(visible) > 1:
+            step = (total_span - group_cy) / (len(visible) - 1)
+            for i, grp in enumerate(visible):
+                _set_grp_y(grp, y_top + int(i * step))
+
+        for i, grp in enumerate(visible):
+            _fill_grp(grp, items[i])
+        return
+
+    # ── Caso: más grupos de lo que hay en el template (clonar) ───────────────
     all_grps = list(base_grps)
     next_id  = 9000
 
