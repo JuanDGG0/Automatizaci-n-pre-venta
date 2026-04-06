@@ -704,10 +704,18 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px" id="torresSelector"></div>
 
-      <!-- Panel QA por torre -->
+      <!-- Panel QA global -->
       <div id="qa-por-torre" style="display:none;margin-bottom:24px">
-        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px">¿Incluir FDA de Pruebas de Calidad (QA) por torre?</div>
-        <div id="qa-torres-list" style="display:flex;flex-direction:column;gap:8px"></div>
+        <div class="qa-row">
+          <div class="qa-row-left">
+            <span class="qa-row-icon">🧪</span>
+            <span style="font-size:13px;font-weight:600">¿El proyecto incluye pruebas de calidad (QA)?</span>
+          </div>
+          <div class="qa-toggle" onclick="toggleQaGlobal()">
+            <div class="qa-toggle-track" id="qa-global-track"></div>
+            <span class="qa-toggle-label" id="qa-global-label">Sin QA</span>
+          </div>
+        </div>
       </div>
 
       <!-- Panel de selección de perfiles (visible cuando hay torres seleccionadas) -->
@@ -1037,7 +1045,7 @@ let S = {
   excelVacio: false,
   excelData: null,
   torresSeleccionadas: new Set(),
-  torresQa: {}, // { 'QA': true, 'FULLSTACK': false, ... }
+  incluirQa: false,
   secs: { entregables:false, perfiles:false, consideraciones:false, fda:false },
   modoPerfiles: 'catalogo',  // 'catalogo' | 'manual'
   perfilesManuales: [],       // [{rol, desc}]
@@ -1294,35 +1302,21 @@ function renderPaso2(data){
 
 function toggleTorreSel(t){
   S.torresSeleccionadas.has(t) ? S.torresSeleccionadas.delete(t) : S.torresSeleccionadas.add(t);
-  if(!S.torresSeleccionadas.has(t)) delete S.torresQa[t];
-  else S.torresQa[t] = true; // QA activado por defecto
+  // sin cambios en QA al seleccionar/deseleccionar torres
   if(S.excelData) renderPaso2(S.excelData);
 }
 
-function toggleQaTorre(t){
-  S.torresQa[t] = !S.torresQa[t];
+function toggleQaGlobal(){
+  S.incluirQa = !S.incluirQa;
   renderQaPanel();
 }
 
 function renderQaPanel(){
   const panel = document.getElementById('qa-por-torre');
-  const list  = document.getElementById('qa-torres-list');
   if(S.torresSeleccionadas.size === 0){ panel.style.display = 'none'; return; }
   panel.style.display = 'block';
-  list.innerHTML = [...S.torresSeleccionadas].map(t => {
-    const on = S.torresQa[t] !== false;
-    return `
-      <div class="qa-row">
-        <div class="qa-row-left">
-          <span class="qa-row-icon">${TORRE_ICONS[t] || '🏗️'}</span>
-          <span>${t}</span>
-        </div>
-        <div class="qa-toggle" onclick="toggleQaTorre('${t.replace(/'/g,"\\'")}')">
-          <div class="qa-toggle-track ${on ? 'on' : ''}"></div>
-          <span class="qa-toggle-label">${on ? 'Con QA' : 'Sin QA'}</span>
-        </div>
-      </div>`;
-  }).join('');
+  document.getElementById('qa-global-track').className = 'qa-toggle-track' + (S.incluirQa ? ' on' : '');
+  document.getElementById('qa-global-label').textContent = S.incluirQa ? 'Con QA' : 'Sin QA';
   renderPerfilModePanel();
 }
 
@@ -1498,7 +1492,7 @@ async function doGenerate(){
     filial:               S.filial,
     excel_data:           S.excelData,
     torres_seleccionadas: [...S.torresSeleccionadas],
-    torres_qa:            S.torresQa,
+    incluir_qa:           S.incluirQa,
     opciones:             S.secs,
     perfiles_manuales:    (S.modoPerfiles === 'manual' && S.excelVacio) ? S.perfilesManuales : [],
     entregables:          [],
