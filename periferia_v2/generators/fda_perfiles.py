@@ -175,9 +175,9 @@ def _set_bullet_shapes(root, items):
                             t.text = ''
 
     def _hide_grp(grp):
-        for sp in grp:
-            if sp.tag == f'{{{P}}}sp':
-                _hide_shape(sp)
+        parent = grp.getparent()
+        if parent is not None:
+            parent.remove(grp)
 
     ys = [_grp_y(g) for g in base_grps]
     if any(y is None for y in ys):
@@ -257,6 +257,42 @@ def _split_fda(cell_value):
     raw = str(cell_value).strip()
     parts = [p.strip() for p in raw.split('.')]
     return [p + '.' for p in parts if p]
+
+
+def _complement_perfiles(base_perfiles, torres_activas, perf_db):
+    """
+    Completa base_perfiles con genéricos del catálogo:
+    - Si el último slide tiene espacio libre (< 4): lo rellena.
+    - Si todos los slides están llenos: agrega un slide extra con genéricos.
+    """
+    SLOT_SIZE = 4
+    existing_rols = {_norm(p['rol']) for p in base_perfiles}
+
+    genericos = []
+    for torre in torres_activas:
+        key = _norm(torre)
+        torre_generics = perf_db.get(key, [])
+        if not torre_generics:
+            for k in perf_db:
+                if key in k or k in key:
+                    torre_generics = perf_db[k]
+                    break
+        for g in torre_generics:
+            if _norm(g['rol']) not in existing_rols:
+                genericos.append(g)
+                existing_rols.add(_norm(g['rol']))
+
+    if not genericos:
+        return base_perfiles
+
+    last_slot = len(base_perfiles) % SLOT_SIZE
+    if last_slot == 0:
+        # Todos los slides llenos → slide extra con genéricos
+        return base_perfiles + genericos[:SLOT_SIZE]
+    else:
+        # Último slide con espacio → completarlo
+        needed = SLOT_SIZE - last_slot
+        return base_perfiles + genericos[:needed]
 
 
 def _load_generales():
@@ -964,26 +1000,26 @@ def edit(pptx_bytes, config):
     perfiles_manuales = config.get('perfiles_manuales') or []
 
     if perfiles_manuales:
-        # El usuario eligió perfiles específicos desde el buscador → usar esos
-        perfiles = [
+        base_perfiles = [
             {'rol': p['rol'], 'desc': (p.get('desc') or '').strip()}
             for p in perfiles_manuales
             if p.get('rol')
         ]
-    elif not usar_genericos and excel_perfiles:
-        # Pill OFF + Excel tiene perfiles → solo hay nombre de rol (sin campo descripción)
-        # Buscar la descripción más cercana en el catálogo; si no hay match → placeholder bold
-        perfiles = []
+        perfiles = _complement_perfiles(base_perfiles, torres_activas, perf_db) if usar_genericos else base_perfiles
+    elif excel_perfiles:
+        # Buscar descripción en catálogo; si no hay match → placeholder bold
+        base_perfiles = []
         for p in excel_perfiles:
             if not p.get('perfil'):
                 continue
             catalog_desc = _find_desc_in_catalog(p['perfil'], perf_db)
             if catalog_desc:
-                perfiles.append({'rol': p['perfil'], 'desc': catalog_desc})
+                base_perfiles.append({'rol': p['perfil'], 'desc': catalog_desc})
             else:
-                perfiles.append({'rol': p['perfil'], 'desc': _NO_CATALOG_DESC, 'desc_bold': True})
+                base_perfiles.append({'rol': p['perfil'], 'desc': _NO_CATALOG_DESC, 'desc_bold': True})
+        perfiles = _complement_perfiles(base_perfiles, torres_activas, perf_db) if usar_genericos else base_perfiles
     else:
-        # Pill ON (genéricos) O sin datos en Anexos → traer todos desde perf_db
+        # Sin datos en Anexos ni manual → catálogo completo por torre
         perfiles = []
         for torre in torres_activas:
             key = _norm(torre)
@@ -993,7 +1029,7 @@ def edit(pptx_bytes, config):
                     if key in k or k in key:
                         genericos = perf_db[k]
                         break
-            perfiles.extend(genericos)  # TODOS los perfiles de la torre
+            perfiles.extend(genericos)
 
     # ── Validación y log de paginación ──────────────────────────────────────
     total_perfiles    = len(perfiles)
@@ -1039,18 +1075,28 @@ def edit(pptx_bytes, config):
         )
 
     # ── Recolectar ítems FDA ────────────────────────────────────────────────
-    # Prioridad: 1) Pill ON → CLAUSULA_GENERAL (slide único)
-    #            2) Pill OFF + Excel col K tiene ítems → usar esos (multi-slide)
-    #            3) Pill OFF + sin datos Excel → catálogo Generales (cap 6, slide único)
+    # Pill ON = "incluir genéricos" para complementar
+    # Pill OFF = solo datos del Excel o catálogo por torre
+    FDA_SLIDE_CAP = 6  # bullets que caben en una plantilla FDA
     excel_fda_list = [str(it).strip() for it in (excel_data.get('fda') or []) if str(it).strip()]
 
-    if usar_genericos_fda:
+    if usar_genericos_fda and not excel_fda_list:
+        # Pill ON + sin Excel → CLAUSULA_GENERAL pura
         all_fda_items = list(CLAUSULA_GENERAL)
+    elif usar_genericos_fda and excel_fda_list:
+        # Pill ON + Excel tiene ítems → complementar
+        extras = [g for g in CLAUSULA_GENERAL if g not in excel_fda_list]
+        if len(excel_fda_list) < FDA_SLIDE_CAP:
+            # Pocos ítems: completar el slide con genéricos
+            all_fda_items = excel_fda_list + extras[:FDA_SLIDE_CAP - len(excel_fda_list)]
+        else:
+            # Slide(s) completos: agregar slide extra con genéricos
+            all_fda_items = excel_fda_list + extras
     elif excel_fda_list:
-        # Datos específicos del Excel de estimación → multi-slide si es necesario
+        # Pill OFF + Excel → solo ítems del Excel
         all_fda_items = excel_fda_list
     else:
-        # Sin datos en el Excel → catálogo por torre, máx 6 (slide único)
+        # Pill OFF + sin Excel → catálogo por torre, máx 6 (slide único)
         torres_norm_fda = [_norm(t) for t in torres_activas]
         all_fda_items = []
         for torre_key in torres_norm_fda:
@@ -1063,11 +1109,10 @@ def edit(pptx_bytes, config):
             for it in tower_items:
                 if it not in all_fda_items:
                     all_fda_items.append(it)
-        all_fda_items = all_fda_items[:6] if all_fda_items else list(CLAUSULA_GENERAL)
+        all_fda_items = all_fda_items[:FDA_SLIDE_CAP] if all_fda_items else list(CLAUSULA_GENERAL)
 
-    # Paginar: chunks de 6 ítems por slide
-    # Distribución uniforme, máx 8 por slide — sobrantes se absorben en slides existentes
-    fda_chunks = _even_chunks(all_fda_items, max_per=8)
+    # Paginar: máx FDA_SLIDE_CAP ítems por slide (coincide con bullets del template)
+    fda_chunks = _even_chunks(all_fda_items, max_per=FDA_SLIDE_CAP)
 
     print(f'[FDA] Torres activas      : {torres_activas}')
     print(f'[FDA] Total ítems FDA     : {len(all_fda_items)}')
