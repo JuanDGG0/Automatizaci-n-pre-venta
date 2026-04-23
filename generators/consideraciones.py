@@ -45,7 +45,7 @@ PLACEHOLDER_CLIENTE = 'XXXXXXXXXX'
 PLACEHOLDER_FILIAL  = 'Filial'
 
 # Constantes de layout (medidas del template)
-Y_START        = 850000   # Y del primer grupo, debajo del título
+Y_START        = 1107495  # Y del primer grupo, debajo del título (medido del template)
 GRUPO_CY_BASE  = 708641   # altura base del grupo externo (EMU)
 SHAPE_CY_BASE  = 831267   # altura base del shape interno (EMU)
 GAP_ORIGINAL   = 162777   # gap entre grupos en el template
@@ -93,10 +93,27 @@ def _calc_delta(texto):
 
 # ═══════════════════════════════ fuentes de datos ════════════════════════════
 
+def _split_por_punto(texto):
+    """
+    Divide un texto en oraciones usando '.' como separador.
+    Maneja casos como 'Oración 1. Oración 2. Oración 3.'
+    Retorna lista de strings individuales, cada uno terminado en '.'.
+    """
+    partes = re.split(r'\.\s*', texto)
+    oraciones = []
+    for p in partes:
+        p = p.strip()
+        if p and len(p) > 5:
+            oraciones.append(p + '.')
+    return oraciones
+
+
 def _load_desde_excel(excel_consideraciones, cliente, filial_nombre):
     """
     Carga las consideraciones del Excel de estimación (columna J).
     Se incluyen SIEMPRE, independientemente de la pill.
+    Cada ítem puede contener varias oraciones separadas por '.' — se dividen
+    en consideraciones individuales (una por cuadro en el slide).
     """
     if not excel_consideraciones:
         print('[CONSIDERACIONES] excel_data.consideraciones vacío.')
@@ -106,9 +123,15 @@ def _load_desde_excel(excel_consideraciones, cliente, filial_nombre):
     for item in excel_consideraciones:
         if not item or not str(item).strip():
             continue
-        texto = _apply_replacements(str(item).strip(), cliente, filial_nombre)
-        if texto not in resultado:
-            resultado.append(texto)
+        raw = str(item).strip()
+        # Dividir por punto para obtener oraciones individuales
+        oraciones = _split_por_punto(raw)
+        if not oraciones:
+            oraciones = [raw if raw.endswith('.') else raw + '.']
+        for oracion in oraciones:
+            texto = _apply_replacements(oracion, cliente, filial_nombre)
+            if texto not in resultado:
+                resultado.append(texto)
     return resultado
 
 
