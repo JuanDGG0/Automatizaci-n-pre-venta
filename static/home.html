@@ -1507,56 +1507,129 @@ function showToast(msg, type='ok'){
   setTimeout(()=>t.classList.remove('show'), 4000);
 }
 
+/* ── TORRES → ACTIVIDADES ───────────────────────────────────────────── */
+function torresAActividades(torres) {
+  return torres
+    .filter(t => t.horas > 0)
+    .map(t => ({
+      torre: t.nombre,
+      actividad: t.nombre,
+      horas: t.horas
+    }));
+}
+
 /* ── GENERATE ───────────────────────────────────────────────────────── */
 async function doGenerate(){
   const btn = document.querySelector('.btn-gen');
   btn.disabled = true;
   btn.textContent = '⏳ Generando...';
 
-  const payload = {
-    filial:               S.filial,
-    excel_data:           S.excelData,
-    torres_seleccionadas: [...S.torresSeleccionadas],
-    incluir_qa:           S.incluirQa,
-    opciones:             S.secs,
-    perfiles_manuales:    (S.modoPerfiles === 'manual' && S.excelVacio) ? S.perfilesManuales : []
-  };
-
   try {
-    const r = await fetch('http://localhost:8090/generate', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(payload)
-    });
 
-    const d = await r.json();
-    if (!d.ok) throw new Error(d.error || 'Error generando');
+    // 🔥 1. Construir actividades desde torres
+    const actividades = torresAActividades(S.excelData.torres || []);
 
-    const files = d.files || [];
-    if (!files.length) throw new Error('No se recibieron archivos');
+    console.log("ACTIVIDADES:", actividades); // debug
 
-    // Mostrar y descargar
-    files.forEach((f, i) => {
-      setTimeout(() => {
-        const a = document.createElement('a');
-        a.href     = f.url;
-        a.download = f.name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      }, i * 700);
-    });
+    // 🔥 2. Construir payload
+    const payload = {
+      filial:               S.filial,
+      excel_data:           S.excelData,
+      torres_seleccionadas: [...S.torresSeleccionadas],
+      incluir_qa:           S.incluirQa,
+      opciones:             S.secs,
+      perfiles_manuales:    (S.modoPerfiles === 'manual' && S.excelVacio) ? S.perfilesManuales : [],
+      actividades           // 👈 ahora sí existe
+    };
 
-    showToast('✓ Propuesta generada y descargando!', 'ok');
+    // 🔥 3. Elegir endpoint según modo
+    if (S.mode === "crono") {
+      await generarCronograma(payload);
+    } else {
+      await generarPropuesta(payload);
+    }
 
-  } catch(e) {
-    showToast('✗ ' + e.message, 'err');
-    console.error(e);
+  } catch (err) {
+    console.error(err);
+    showToast('✗ ' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⬇ Generar documento';
+  }
+}
+
+
+async function generarPropuesta(payload) {
+  const btn = document.querySelector('.btn-gen');
+  const r = await fetch('http://localhost:8090/generate', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(payload)
+  });
+
+  const d = await r.json();
+  if (!d.ok) throw new Error(d.error || 'Error generando');
+
+  const files = d.files || [];
+  if (!files.length) throw new Error('No se recibieron archivos');
+
+  files.forEach((f, i) => {
+    setTimeout(() => {
+      const a = document.createElement('a');
+      a.href     = f.url;
+      a.download = f.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }, i * 700);
+  });
+
+  showToast('✓ Propuesta generada y descargando!', 'ok');
+}
+
+async function generarCronograma(payload) {
+  const res = await fetch("/generate-cronograma", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+
+  if (!data.ok) {
+    alert("Error generando cronograma");
+    return;
   }
 
-  btn.disabled = false;
-  btn.textContent = '⬇ Generar documento';
+  descargarArchivoBase64(data.file, data.filename);
 }
+
+function descargarArchivoBase64(base64, filename) {
+  const byteCharacters = atob(base64);
+  const byteNumbers = new Array(byteCharacters.length);
+
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+
+  const byteArray = new Uint8Array(byteNumbers);
+
+  const blob = new Blob([byteArray], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  });
+
+  const url = window.URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename || "cronograma.xlsx";
+  a.click();
+
+  window.URL.revokeObjectURL(url);
+}
+
 
 /* ── INIT ───────────────────────────────────────────────────────────── */
 paintHSteps();
