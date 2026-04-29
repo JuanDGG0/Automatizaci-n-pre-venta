@@ -1228,22 +1228,53 @@ function parseExcel(buffer, filename){
       data.entregables = Object.entries(entMap).map(([torre, items]) => ({ torre, items }));
     }
 
-    // Hoja RESUMEN → torres — columna 1 tiene los nombres, columna 2 las horas
+    // Hoja RESUMEN → torres — col 1 = nombre, col 2 = horas, col 3 = personas
     if(wb.SheetNames.includes('RESUMEN')){
       const rows = XLSX.utils.sheet_to_json(wb.Sheets['RESUMEN'], { header:1, defval:null });
+
+      // ── Leer subtorres Full Stack (BACKEND, FRONTEND, UX/UI) para fallback
+      // cuando Torre Full Stack tiene #REF! en horas (fórmula rota).
+      let fullStackHorasFallback    = 0;
+      let fullStackPersonasFallback = 0;
+      let inDetalle = false;
+      for(const row of rows){
+        if(row[1]==='DETALLE FULL STACK' && row[2]==='HORAS'){ inDetalle=true; continue; }
+        if(!inDetalle) continue;
+        if(row[1]==='TOTALES FULL STACK'){ inDetalle=false; continue; }
+        const subHoras    = typeof row[2]==='number' ? row[2] : (parseFloat(row[2]) || 0);
+        const subPersonas = typeof row[3]==='number' ? row[3] : (parseFloat(row[3]) || 0);
+        if(subHoras > 0){
+          fullStackHorasFallback   += subHoras;
+          fullStackPersonasFallback = Math.max(fullStackPersonasFallback, subPersonas);
+        }
+      }
+
+      // ── Leer tabla principal de torres
       let inTorres = false;
       for(const row of rows){
         if(row[1]==='TORRE' && row[2]==='Horas'){ inTorres=true; continue; }
         if(!inTorres) continue;
         if(!row[1] || String(row[1]).includes('TOTALES')) break;
+
         const rawNombre = String(row[1]).trim();
         if(!rawNombre) continue;
-        // Usar nombre canónico si existe en el mapa, si no usar el raw sin prefijo
+
         const nombre = TORRE_RESUMEN_MAP[rawNombre] || rawNombre.replace(/^Torre\s+/i, '').toUpperCase();
-        const horas   = typeof row[2]==='number' ? row[2] : (parseFloat(row[2]) || 0);
-        const semanas = typeof row[6]==='number' ? parseFloat(row[6].toFixed(1)) : (parseFloat(row[6]) || 0);
+
+        // Horas: si la celda tiene #REF! o no es número, intentar fallback para Full Stack
+        let horas = typeof row[2]==='number' ? row[2] : (parseFloat(row[2]) || 0);
+        if(horas === 0 && nombre === 'FULLSTACK / DESARROLLO' && fullStackHorasFallback > 0)
+          horas = fullStackHorasFallback;
+
+        // Personas: col 3. Solo contar si la torre está activa (horas > 0).
+        // El valor "1" predeterminado no significa que haya alguien asignado.
+        const personasRaw = typeof row[3]==='number' ? row[3] : (parseFloat(row[3]) || 1);
+        let personas = personasRaw;
+        if(horas === 0 && nombre === 'FULLSTACK / DESARROLLO' && fullStackPersonasFallback > 0)
+          personas = fullStackPersonasFallback;
+
         if(horas > 0)
-          data.torres.push({ nombre, horas, semanas });
+          data.torres.push({ nombre, horas, personas: Math.max(1, personas) });
       }
     }
 
@@ -1512,9 +1543,10 @@ function torresAActividades(torres) {
   return torres
     .filter(t => t.horas > 0)
     .map(t => ({
-      torre: t.nombre,
+      torre:    t.nombre,
       actividad: t.nombre,
-      horas: t.horas
+      horas:    t.horas,
+      personas: t.personas || 1   // número de personas asignadas a esta torre
     }));
 }
 

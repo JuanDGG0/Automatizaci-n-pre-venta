@@ -12,7 +12,7 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
 # ─── Constantes ──────────────────────────────────────────────────────────────
-HORAS_POR_SEMANA   = 40
+HORAS_SEMANALES    = 43   # horas laborales por persona por semana
 SEMANAS_POR_MES    = 4
 SEMANAS_POR_SPRINT = 2
 
@@ -48,7 +48,9 @@ def generate_cronograma(config: dict) -> bytes:
         raise ValueError("No hay actividades para generar cronograma")
 
     for act in actividades:
-        act["semanas"] = max(1, math.ceil(act["horas"] / HORAS_POR_SEMANA))
+        # semanas = horas_totales / personas / horas_semanales_por_persona
+        personas = max(1, int(act.get("personas", 1)))
+        act["semanas"] = max(1, math.ceil(act["horas"] / personas / HORAS_SEMANALES))
 
     total_semanas = max(a["semanas"] for a in actividades)
     total_cols = total_semanas + 1  # col 0-indexed 1 = Kick Off, 2.. = semanas
