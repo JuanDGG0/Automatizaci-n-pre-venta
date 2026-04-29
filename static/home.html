@@ -1027,12 +1027,12 @@ const MODES   = { ppt:'Propuesta PPT', crono:'Cronograma' };
 const TOTAL_STEPS = 5;
 
 const TORRES_ALL = [
-  'FULLSTACK / DESARROLLO','QA','ARQUITECTURA','DATOS','RPA',
+  'FULLSTACK / DESARROLLO','ARQUITECTURA','DATOS','RPA',
   'DEVOPS','CIBERSEGURIDAD','IA','SAP','PMO','MOBILE','PORTALES','INTEGRACIÓN'
 ];
 
 const TORRE_ICONS = {
-  'FULLSTACK / DESARROLLO':'💻','QA':'🔍','ARQUITECTURA':'🏛️','DATOS':'📊',
+  'FULLSTACK / DESARROLLO':'💻','ARQUITECTURA':'🏛️','DATOS':'📊',
   'RPA':'🤖','DEVOPS':'🚀','CIBERSEGURIDAD':'🛡️','IA':'🧠',
   'SAP':'⚙️','PMO':'📋','MOBILE':'📱','PORTALES':'🌐','INTEGRACIÓN':'🔗'
 };
@@ -1131,7 +1131,25 @@ function handleFile(input){
 function parseExcel(buffer, filename){
   try {
     const wb = XLSX.read(buffer, { type: 'array' });
-    const data = { filename, cliente: '', proyecto: '', torres: [], perfiles: [], consideraciones: [] };
+    const data = { filename, cliente: '', proyecto: '', torres: [], perfiles: [], consideraciones: [], entregables: [] };
+
+    // Mapa de nombres del Excel a nombres canónicos de torre
+    const TORRE_RESUMEN_MAP = {
+      'Torre Full Stack':     'FULLSTACK / DESARROLLO',
+      'Torre Data':           'DATOS',
+      'Torre IA':             'IA',
+      'Torre Portales':       'PORTALES',
+      'Torre Integración':    'INTEGRACIÓN',
+      'Torre Integracion':    'INTEGRACIÓN',
+      'Torre DevOps':         'DEVOPS',
+      'Torre RPA':            'RPA',
+      'Torre Cyberseguridad': 'CIBERSEGURIDAD',
+      'Torre QA':             'QA',
+      'Torre Arquitectura':   'ARQUITECTURA',
+      'Torre Mobile':         'MOBILE',
+      'Torre SAP':            'SAP',
+      'Torre PMO':            'PMO',
+    };
 
     // Hoja RESUMEN → cliente en B7
     if(wb.SheetNames.includes('RESUMEN')){
@@ -1139,11 +1157,13 @@ function parseExcel(buffer, filename){
       if(cell && cell.v) data.cliente = String(cell.v).trim();
     }
 
-    // Hoja Estimación → proyecto + consideraciones (col J) + FDA (col K)
+    // Hoja Estimación → proyecto + consideraciones (col J) + FDA (col K) + entregables (col M)
     if(wb.SheetNames.includes('Estimación')){
       const rows = XLSX.utils.sheet_to_json(wb.Sheets['Estimación'], { header:1, defval:null });
       const cons = [];
       const fda  = [];
+      const entMap = {};
+      let currTorreEnt = null;
 
       for(const row of rows){
         // Proyecto desde columna A/B
@@ -1179,31 +1199,36 @@ function parseExcel(buffer, filename){
             }
           }
         }
+
+        // Entregables desde columna M (índice 12)
+        // Estructura: cuando M='Entregables por torre' es cabecera de sección → extraer
+        // torre de col A ("Estimacion TORRE Full Stack- Jhon Perez").
+        // Cualquier otro valor no vacío en M es un ítem real de entregable.
+        const cellM = row[12];
+        if(cellM != null){
+          const textoM = String(cellM).trim();
+          if(/^Entregables?\s+por\s+torre\s*$/i.test(textoM)){
+            // Cabecera de sección: detectar torre desde col A
+            const cellA = row[0] != null ? String(row[0]).trim() : '';
+            const m = cellA.match(/TORRE\s+(.+?)\s*[-–]/i);
+            if(m){
+              const rawTorre = m[1].trim();
+              currTorreEnt = TORRE_RESUMEN_MAP['Torre ' + rawTorre] || rawTorre.toUpperCase();
+            }
+          } else if(currTorreEnt && textoM.length > 3){
+            // Ítem real de entregable
+            if(!entMap[currTorreEnt]) entMap[currTorreEnt] = [];
+            if(!entMap[currTorreEnt].includes(textoM)) entMap[currTorreEnt].push(textoM);
+          }
+        }
       }
 
       data.consideraciones = cons;
       data.fda = fda;
+      data.entregables = Object.entries(entMap).map(([torre, items]) => ({ torre, items }));
     }
 
     // Hoja RESUMEN → torres — columna 1 tiene los nombres, columna 2 las horas
-    // Mapa de nombres del RESUMEN a nombres canónicos (deben coincidir con TORRES_ALL
-    // y con las claves del catálogo Generales_para_todos.xlsx).
-    const TORRE_RESUMEN_MAP = {
-      'Torre Full Stack':     'FULLSTACK / DESARROLLO',
-      'Torre Data':           'DATOS',
-      'Torre IA':             'IA',
-      'Torre Portales':       'PORTALES',
-      'Torre Integración':    'INTEGRACIÓN',
-      'Torre Integracion':    'INTEGRACIÓN',
-      'Torre DevOps':         'DEVOPS',
-      'Torre RPA':            'RPA',
-      'Torre Cyberseguridad': 'CIBERSEGURIDAD',
-      'Torre QA':             'QA',
-      'Torre Arquitectura':   'ARQUITECTURA',
-      'Torre Mobile':         'MOBILE',
-      'Torre SAP':            'SAP',
-      'Torre PMO':            'PMO',
-    };
     if(wb.SheetNames.includes('RESUMEN')){
       const rows = XLSX.utils.sheet_to_json(wb.Sheets['RESUMEN'], { header:1, defval:null });
       let inTorres = false;
@@ -1494,9 +1519,7 @@ async function doGenerate(){
     torres_seleccionadas: [...S.torresSeleccionadas],
     incluir_qa:           S.incluirQa,
     opciones:             S.secs,
-    perfiles_manuales:    (S.modoPerfiles === 'manual' && S.excelVacio) ? S.perfilesManuales : [],
-    entregables:          [],
-    consideraciones:      []
+    perfiles_manuales:    (S.modoPerfiles === 'manual' && S.excelVacio) ? S.perfilesManuales : []
   };
 
   try {

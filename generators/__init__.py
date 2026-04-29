@@ -23,18 +23,21 @@ def generate(config, out_dir):
     """
     config = {
         filial: 'corp' | 'group' | 'cbit',
-        excel_data: { torres: [...], perfiles: [...], cliente: str, proyecto: str },
-        torres_seleccionadas: [...],   # si excel vacío
-        incluir_qa: True | False,          # ¿QA hace parte de esta propuesta?
-        opciones: {
-            perfiles: 'excel' | 'genericos',
-            fda: 'excel' | 'genericos',
-            entregables: 'genericos' | 'manual',
-            consideraciones: 'genericos' | 'manual',
-            cronograma: 'excel' | 'manual'
+        excel_data: {
+            torres: [...], perfiles: [...], cliente: str, proyecto: str,
+            consideraciones: [...],  # col J de Estimación
+            fda: [...],              # col K de Estimación
+            entregables: [{torre, items:[...]}, ...],  # col M de Estimación
         },
-        entregables: [...],        # si manual
-        consideraciones: [...],    # si manual
+        torres_seleccionadas: [...],   # si excel vacío
+        incluir_qa: True | False,
+        opciones: {
+            perfiles:        bool,  # true = pill ON = también usar genéricos del catálogo
+            fda:             bool,  # true = usar cláusula general, false = por torre
+            entregables:     bool,  # true = complementar con catálogo si faltan torres
+            consideraciones: bool,  # true = agregar genéricos al final
+        },
+        perfiles_manuales: [...],  # si el usuario seleccionó perfiles manualmente
     }
     Retorna: { 'propuesta': '/path/to/propuesta.pptx' }
     """
