@@ -7,7 +7,7 @@ import sys, traceback, zipfile, io, json
 from pathlib import Path
 from lxml import etree
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / 'periferia_v2'))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from generators import generate
 from generators.fda_perfiles import _even_chunks, _find_desc_in_catalog, _load_generales
 
@@ -57,8 +57,10 @@ def fda_slide_count(pptx_bytes):
                 count += 1
     return count
 
+ALL_PERF_ROLES = {'CuadroTexto 10', 'CuadroTexto 30', 'CuadroTexto 47', 'CuadroTexto 53'}
+
 def perf_slide_count(pptx_bytes):
-    """Cuenta cuántos slides tienen el marcador de perfiles (CuadroTexto 10)."""
+    """Cuenta slides de perfiles generados: ≥1 slot de rol Y título 'Perfiles'."""
     count = 0
     with zipfile.ZipFile(io.BytesIO(pptx_bytes)) as z:
         for n in sorted(z.namelist()):
@@ -68,7 +70,10 @@ def perf_slide_count(pptx_bytes):
             names = {sp.find(f'.//{{{P}}}cNvPr').attrib.get('name','')
                      for sp in root.iter(f'{{{P}}}sp')
                      if sp.find(f'.//{{{P}}}cNvPr') is not None}
-            if 'CuadroTexto 10' in names:
+            if not (ALL_PERF_ROLES & names):
+                continue
+            txt = ''.join(t.text or '' for t in root.iter(f'{{{A}}}t'))
+            if 'Perfiles' in txt:
                 count += 1
     return count
 
