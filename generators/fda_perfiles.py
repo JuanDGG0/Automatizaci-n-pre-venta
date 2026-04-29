@@ -350,16 +350,35 @@ def _get_slide_order(pptx_bytes):
 
 def _find_slide(slides_order, files_dict, marker_name):
     """
-    Encuentra el primer slide que contiene un shape con el nombre exacto.
-    Retorna (index, path). Más robusto que índices fijos: no se rompe
-    cuando se duplican slides de perfiles antes del slide de FDA u otros.
+    Encuentra el slide que contiene un shape con el nombre exacto.
+    Para Perfiles (CuadroTexto 10): exige que el slide tenga los 4 slots de roles
+    para evitar falsos positivos cuando otras slides comparten el mismo nombre de shape.
+    Para FDA (Rectángulo 10): exige al menos 3 bullet rects.
+    Retorna (index, path).
     """
+    ALL_ROLE_NAMES = set(name for name, _ in _PERFIL_SLOT_NAMES)   # 4 nombres de roles
+
     for i, path in enumerate(slides_order):
         root = etree.fromstring(files_dict[path])
+        all_shape_names = set()
         for sp in root.iter(f'{{{P}}}sp'):
             nvpr = sp.find(f'.//{{{P}}}cNvPr')
-            if nvpr is not None and nvpr.attrib.get('name') == marker_name:
+            if nvpr is not None:
+                all_shape_names.add(nvpr.attrib.get('name', ''))
+
+        if marker_name == PERFILES_MARKER:
+            # Exigir los 4 slots de perfiles para distinguirlo de otros slides
+            if ALL_ROLE_NAMES.issubset(all_shape_names):
                 return i, path
+        elif marker_name == FDA_MARKER:
+            # Exigir al menos 3 bullet rects para distinguirlo de otros slides
+            found_bullets = sum(1 for b in BULLET_RECTS if b in all_shape_names)
+            if found_bullets >= 3:
+                return i, path
+        else:
+            if marker_name in all_shape_names:
+                return i, path
+
     raise ValueError(
         f"No se encontró ningún slide con el shape '{marker_name}'. "
         f"Verifica que la plantilla PPTX tenga ese nombre de shape exacto."
