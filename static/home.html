@@ -33,6 +33,190 @@ body {
   background:var(--bg0); color:var(--text); min-height:100vh; overflow-x:hidden;
 }
 
+/* ─────────────────────────────────────────────────────────── BOT 3D */
+.bot3d {
+  position:fixed;
+  right:24px;
+  bottom:22px;
+  z-index:50;
+  width:128px;
+  height:128px;
+  pointer-events:none;
+  filter:drop-shadow(0 18px 38px rgba(0,0,0,.45)) drop-shadow(0 0 26px rgba(0,230,118,.18));
+  opacity:.95;
+}
+.bot3d.bot3d-full {
+  left:26px;
+  right:auto;
+  bottom:22px;
+  width:230px;
+  height:460px;
+  opacity:.78;
+  z-index:5; /* detrás del contenido principal */
+  filter:drop-shadow(0 28px 60px rgba(0,0,0,.55)) drop-shadow(0 0 34px rgba(0,230,118,.14));
+}
+.bot3d.bot3d-full .orb { display:none; }
+.bot3d.bot3d-full .bwrap { animation:botFloat2 5.4s ease-in-out infinite; }
+@keyframes botFloat2 {
+  0%,100% { transform:translateY(0) rotateZ(.8deg); }
+  50%     { transform:translateY(-10px) rotateZ(-.8deg); }
+}
+.bot3d.bot3d-full .body {
+  position:absolute;
+  left:50%;
+  top:12px;
+  width:190px;
+  height:430px;
+  transform:translateX(-50%);
+  border-radius:34px;
+  background:
+    radial-gradient(circle at 50% 6%, rgba(255,255,255,.10), transparent 48%),
+    radial-gradient(circle at 35% 22%, rgba(0,230,118,.22), transparent 58%),
+    linear-gradient(165deg, rgba(13,34,18,.92), rgba(6,16,9,.96));
+  border:1px solid rgba(0,230,118,.16);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
+  overflow:hidden;
+}
+.bot3d.bot3d-full .head {
+  position:absolute;
+  left:50%;
+  top:22px;
+  width:148px;
+  height:148px;
+  transform:translateX(-50%);
+  border-radius:42px;
+  border:1px solid rgba(0,230,118,.20);
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255,255,255,.14), transparent 50%),
+    linear-gradient(155deg, rgba(15,34,19,.92), rgba(7,16,10,.96));
+}
+.bot3d.bot3d-full .head .face {
+  left:18px; right:18px;
+  top:44px; height:64px;
+}
+.bot3d.bot3d-full .torso {
+  position:absolute;
+  left:50%;
+  top:178px;
+  width:164px;
+  height:168px;
+  transform:translateX(-50%);
+  border-radius:34px;
+  border:1px solid rgba(0,230,118,.16);
+  background:
+    radial-gradient(circle at 30% 30%, rgba(0,230,118,.12), transparent 55%),
+    linear-gradient(180deg, rgba(0,230,118,.05), rgba(0,0,0,0));
+}
+.bot3d.bot3d-full .core {
+  position:absolute;
+  left:50%;
+  top:44px;
+  width:56px;
+  height:56px;
+  transform:translateX(-50%);
+  border-radius:18px;
+  background:radial-gradient(circle at 35% 35%, rgba(236,250,237,.16), rgba(0,230,118,.55) 55%, rgba(0,0,0,0) 72%);
+  box-shadow:0 0 26px rgba(0,230,118,.22);
+  border:1px solid rgba(0,230,118,.22);
+}
+.bot3d.bot3d-full .arm {
+  position:absolute;
+  top:192px;
+  width:34px;
+  height:160px;
+  border-radius:22px;
+  border:1px solid rgba(0,230,118,.14);
+  background:linear-gradient(180deg, rgba(0,230,118,.05), rgba(0,0,0,0));
+}
+.bot3d.bot3d-full .arm.l { left:8px; transform:rotate(8deg); }
+.bot3d.bot3d-full .arm.r { right:8px; transform:rotate(-8deg); }
+.bot3d.bot3d-full .leg {
+  position:absolute;
+  bottom:24px;
+  width:44px;
+  height:126px;
+  border-radius:26px;
+  border:1px solid rgba(0,230,118,.14);
+  background:linear-gradient(180deg, rgba(0,230,118,.04), rgba(0,0,0,0));
+}
+.bot3d.bot3d-full .leg.l { left:62px; }
+.bot3d.bot3d-full .leg.r { right:62px; }
+.bot3d.bot3d-full .ring {
+  bottom:8px;
+  width:170px;
+  opacity:.65;
+}
+.bot3d .bwrap {
+  width:100%; height:100%;
+  transform-style:preserve-3d;
+  animation:botFloat 4.6s ease-in-out infinite;
+}
+@keyframes botFloat {
+  0%,100% { transform:translateY(0) rotateZ(-1.2deg); }
+  50%     { transform:translateY(-8px) rotateZ(1.2deg); }
+}
+.bot3d .orb {
+  position:absolute; inset:0;
+  border-radius:30px;
+  background:
+    radial-gradient(circle at 30% 22%, rgba(255,255,255,.18), transparent 44%),
+    radial-gradient(circle at 60% 70%, rgba(0,230,118,.25), transparent 55%),
+    linear-gradient(155deg, rgba(13,34,18,.92), rgba(6,16,9,.96));
+  border:1px solid rgba(0,230,118,.18);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
+}
+.bot3d .face {
+  position:absolute;
+  left:18px; right:18px;
+  top:32px; height:56px;
+  border-radius:22px;
+  background:linear-gradient(180deg, rgba(0,230,118,.08), rgba(0,0,0,0));
+  border:1px solid rgba(0,230,118,.22);
+  overflow:hidden;
+}
+.bot3d .scan {
+  position:absolute; inset:-30% 0;
+  background:linear-gradient(180deg, transparent, rgba(0,230,118,.20), transparent);
+  animation:botScan 2.9s linear infinite;
+  opacity:.7;
+}
+@keyframes botScan { from { transform:translateY(-20%);} to { transform:translateY(70%);} }
+.bot3d .eyes {
+  position:absolute;
+  left:0; right:0;
+  top:18px;
+  display:flex;
+  justify-content:center;
+  gap:16px;
+}
+.bot3d .eye {
+  width:14px; height:14px;
+  border-radius:8px;
+  background:radial-gradient(circle at 35% 35%, #ECFAED 0 22%, rgba(0,230,118,.85) 36%, rgba(0,200,83,.15) 72%, rgba(0,0,0,0) 74%);
+  box-shadow:0 0 14px rgba(0,230,118,.35);
+}
+.bot3d .mouth {
+  position:absolute;
+  left:50%;
+  top:40px;
+  width:34px; height:8px;
+  transform:translateX(-50%);
+  border-radius:10px;
+  background:linear-gradient(90deg, rgba(0,230,118,.18), rgba(0,230,118,.55), rgba(0,230,118,.18));
+  opacity:.9;
+}
+.bot3d .ring {
+  position:absolute;
+  left:50%; bottom:10px;
+  width:94px; height:26px;
+  transform:translateX(-50%) perspective(140px) rotateX(70deg);
+  border-radius:50%;
+  border:1px solid rgba(0,230,118,.20);
+  box-shadow:0 0 16px rgba(0,230,118,.12), inset 0 0 10px rgba(0,230,118,.12);
+  background:radial-gradient(circle at 50% 50%, rgba(0,230,118,.14), transparent 58%);
+  opacity:.9;
+}
+
 /* ─────────────────────────────────────────────────────── CANVAS BG */
 #bgCanvas {
   position:fixed; inset:0; z-index:0; pointer-events:none;
@@ -594,6 +778,44 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 <body>
 
 <canvas id="bgCanvas"></canvas>
+
+<div class="bot3d bot3d-full" aria-hidden="true">
+  <div class="bwrap">
+    <div class="body">
+      <div class="head">
+        <div class="face">
+          <div class="scan"></div>
+          <div class="eyes">
+            <div class="eye"></div>
+            <div class="eye"></div>
+          </div>
+          <div class="mouth"></div>
+        </div>
+      </div>
+      <div class="arm l"></div>
+      <div class="arm r"></div>
+      <div class="torso"><div class="core"></div></div>
+      <div class="leg l"></div>
+      <div class="leg r"></div>
+    </div>
+    <div class="ring"></div>
+  </div>
+</div>
+
+<div class="bot3d" aria-hidden="true">
+  <div class="bwrap">
+    <div class="orb"></div>
+    <div class="face">
+      <div class="scan"></div>
+      <div class="eyes">
+        <div class="eye"></div>
+        <div class="eye"></div>
+      </div>
+      <div class="mouth"></div>
+    </div>
+    <div class="ring"></div>
+  </div>
+</div>
 
 <header class="hdr">
   <div class="logo">
