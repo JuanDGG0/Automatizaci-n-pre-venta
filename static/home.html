@@ -502,6 +502,13 @@ body::after {
   padding:10px 14px;
 }
 .perfil-selected-card .psc-info { flex:1; }
+.perfil-selected-card .psc-rol,
+.perfil-selected-card .psc-desc {
+   display:block;
+   word-break: break-word;
+   overflow-wrap: anywhere;
+   white-space: normal;
+}
 .perfil-selected-card .psc-rol  { font-size:13px; font-weight:600; color:var(--white); }
 .perfil-selected-card .psc-desc { font-size:11px; color:var(--muted); margin-top:2px; }
 .perfil-selected-card .psc-rm   { cursor:pointer; color:var(--danger); font-size:18px; line-height:1; padding:0 2px; }
@@ -1290,12 +1297,14 @@ function parseExcel(buffer, filename){
         // (se relajó el typeof==='string' para no perder valores numéricos inadvertidos)
         const perfil = row[1] != null && String(row[1]).trim() !== '' ? String(row[1]).trim() : null;
         if(!perfil) continue;
-        // Capturar descripción/seniority de columna [2] si existe
+        // Capturar seniority (col 2) y personas (col 3)
         const seniority = row[2] != null && String(row[2]).trim() !== '' ? String(row[2]).trim() : '';
+        const personas  = typeof row[3] === 'number' ? row[3] : (parseFloat(row[3]) || 1);
         data.perfiles.push({
-          torre:    cell0.replace('Torre ','').replace('TORRE ',''),
-          perfil:   perfil,
-          seniority: seniority
+          torre:     cell0.replace('Torre ','').replace('TORRE ',''),
+          perfil:    perfil,
+          seniority: seniority,
+          personas:  Math.max(1, personas)
         });
       }
     }
@@ -1560,8 +1569,11 @@ async function doGenerate(){
 
     // 🔥 1. Construir actividades desde torres
     const actividades = torresAActividades(S.excelData.torres || []);
-
-    console.log("ACTIVIDADES:", actividades); // debug
+    // Pasar objetos completos: solo roles con perfil asignado (torre activa con horas)
+    // Torres sin perfil tienen personas=1 predeterminado — se excluyen por falta de perfil
+    const roles = (S.excelData?.perfiles || []).filter(p => p.perfil && p.perfil.trim() !== '');
+    console.log("ACTIVIDADES:", actividades);
+    console.log ("ROLES:", roles) // debug
 
     // 🔥 2. Construir payload
     const payload = {
@@ -1571,7 +1583,8 @@ async function doGenerate(){
       incluir_qa:           S.incluirQa,
       opciones:             S.secs,
       perfiles_manuales:    (S.modoPerfiles === 'manual' && S.excelVacio) ? S.perfilesManuales : [],
-      actividades           // 👈 ahora sí existe
+      actividades,           // 👈 ahora sí existe
+      roles 
     };
 
     // 🔥 3. Elegir endpoint según modo

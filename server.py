@@ -86,6 +86,9 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', '0'))
             raw    = self.rfile.read(length).decode('utf-8')
             data   = json.loads(raw) if raw else {}
+            roles = data.get('roles', [])
+
+            print("ROLES RECIBIDOS:", roles)
 
             if self.path == '/generate-cronograma':
                 from generators.cronograma_excel import generate_cronograma
