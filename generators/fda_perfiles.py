@@ -94,6 +94,40 @@ def _esc(t):
     return (t or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
+def _clean_inline_text(s: str) -> str:
+    """
+    Normaliza texto que termina en shapes (PPT):
+    - Sin saltos de línea (evita "encimados" en cajas con autofit raro)
+    - Espaciado consistente
+    """
+    if s is None:
+        return ''
+    s = str(s).replace('\r\n', '\n').replace('\r', '\n')
+    s = s.replace('\n', ' ')
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def _split_profile_titles(raw_title: str):
+    """
+    Heurística para cuando un "perfil" llega concatenado desde el frontend/Excel.
+    Caso típico: "Rol A (Perfil X) & Rol B (Perfil Y)".
+    Solo divide cuando hay evidencia de 2 perfiles en el mismo string.
+    """
+    t = _clean_inline_text(raw_title)
+    if not t:
+        return []
+    # Señal fuerte de concatenación: varias ocurrencias del marcador "(Perfil"
+    perfil_markers = len(re.findall(r'\(\s*PERFIL\b', _norm(t)))
+    if perfil_markers >= 2 and ' & ' in t:
+        parts = [p.strip() for p in t.split(' & ') if p.strip()]
+        return parts if len(parts) >= 2 else [t]
+    if perfil_markers >= 2 and re.search(r'\s+y\s+', t, flags=re.I):
+        parts = [p.strip() for p in re.split(r'\s+y\s+', t, flags=re.I) if p.strip()]
+        return parts if len(parts) >= 2 else [t]
+    return [t]
+
+
 def _even_chunks(items, max_per=6):
     """
     Divide items en chunks distribuidos uniformemente (máx max_per por chunk).
@@ -135,6 +169,8 @@ def _set_bullet_shapes(root, items):
     if not base_grps:
         return
 
+    # Sanitizar ítems para evitar saltos/espacios que rompen el render
+    items = [_clean_inline_text(it) for it in items if _clean_inline_text(it)]
     n_items = len(items)
     n_base  = len(base_grps)
 
@@ -178,6 +214,20 @@ def _set_bullet_shapes(root, items):
             if nvpr is not None and nvpr.attrib.get('name') in BULLET_RECTS:
                 txb = sp.find(f'{{{P}}}txBody')
                 if txb is not None:
+                    # Configurar responsividad del texto
+                    bodyPr = txb.find(f'{{{A}}}bodyPr')
+                    if bodyPr is None:
+                        bodyPr = etree.SubElement(txb, f'{{{A}}}bodyPr')
+                    bodyPr.set('wrap', 'square')  # Word wrap habilitado
+                    # Eliminar settings anteriores de autofit
+                    for tag in ('spAutoFit', 'noAutofit', 'normAutofit'):
+                        el = bodyPr.find(f'{{{A}}}{tag}')
+                        if el is not None:
+                            bodyPr.remove(el)
+                    # Agregar normAutofit para reducir fuente si es necesario
+                    etree.SubElement(bodyPr, f'{{{A}}}normAutofit')
+                    
+                    # Rellenar el texto
                     all_t = txb.findall(f'.//{{{A}}}t')
                     if all_t:
                         all_t[0].text = text
@@ -200,11 +250,22 @@ def _set_bullet_shapes(root, items):
                 _remove_grp(grp)
         return
 
-    gaps    = [ys[i+1] - ys[i] for i in range(len(ys) - 1)]
-    avg_gap = sum(gaps) // len(gaps) if gaps else 400000
-    group_cy   = _grp_cy(base_grps[0]) or avg_gap
-    y_top      = ys[0]
-    total_span = (ys[-1] + group_cy) - y_top   # altura total del bbox original
+    # Algunos templates no usan off.y en el grpSp (queda en 0 para todos).
+    # En ese caso, mover el grupo no reubica nada y solo provoca superposición.
+    gaps = [ys[i + 1] - ys[i] for i in range(len(ys) - 1)]
+    if not gaps or max(gaps) <= 0:
+        for i, grp in enumerate(base_grps):
+            if i < n_items:
+                _fill_grp(grp, items[i])
+            else:
+                _remove_grp(grp)
+        return
+
+    # Usar el gap promedio del template como unidad de separación (siempre positiva).
+    # Evita step negativo cuando ext.cy del grupo no coincide con los gaps reales.
+    avg_gap = max(1, (sum(gaps) // len(gaps)) if gaps else 400000)
+    y_top   = ys[0]
+    bbox_span = (n_base - 1) * avg_gap
 
     # ── Caso: menos o igual de grupos base ───────────────────────────────────
     if n_items <= n_base:
@@ -213,11 +274,12 @@ def _set_bullet_shapes(root, items):
             _remove_grp(grp)
 
         visible = base_grps[:n_items]
-        # Redistribuir los visibles uniformemente en el bbox completo
-        if len(visible) > 1:
-            step = (total_span - group_cy) / (len(visible) - 1)
-            for i, grp in enumerate(visible):
-                _set_grp_y(grp, y_top + int(i * step))
+        # Redistribuir con espaciado consistente dentro del bbox del template,
+        # centrando verticalmente el bloque visible para mantener consistencia visual.
+        used_span = (len(visible) - 1) * avg_gap if len(visible) > 1 else 0
+        start_y = y_top + max(0, (bbox_span - used_span) // 2)
+        for i, grp in enumerate(visible):
+            _set_grp_y(grp, start_y + i * avg_gap)
 
         for i, grp in enumerate(visible):
             _fill_grp(grp, items[i])
@@ -235,34 +297,80 @@ def _set_bullet_shapes(root, items):
         all_grps[-1].addnext(new_grp)
         all_grps.append(new_grp)
 
-    # Redistribuir uniformemente dentro del bbox original
-    N    = len(all_grps)
-    step = (total_span - group_cy) / (N - 1) if N > 1 else 0
+    # Redistribuir uniformemente usando el gap promedio del template
+    # (este path es raro: normalmente paginamos a 6 ítems por slide).
     for i, grp in enumerate(all_grps):
-        _set_grp_y(grp, y_top + int(i * step))
+        _set_grp_y(grp, y_top + i * avg_gap)
         _fill_grp(grp, items[i])
 
 
 def _find_desc_in_catalog(rol, perf_db):
     """
     Busca la descripción más cercana para un rol en el catálogo de perfiles.
-    Prioridad: coincidencia exacta (normalizada) → coincidencia parcial → ''.
+    Prioridad: coincidencia exacta → parcial (substring) → similitud por tokens.
     """
-    rol_norm = _norm(rol)
-    best_desc = ''
+    rol_clean = _clean_inline_text(rol)
+    rol_norm = _norm(rol_clean)
+
+    # Variantes comunes: en Excel a veces viene "React" pero en catálogo "Desarrollador React"
+    variants = {rol_clean}
+    if rol_clean and not rol_clean.lower().startswith('desarrollador '):
+        variants.add('Desarrollador ' + rol_clean)
+    if rol_clean and not rol_clean.lower().startswith('ingeniero '):
+        variants.add('Ingeniero ' + rol_clean)
+
+    # Normalizar variantes para comparar
+    v_norms = {_norm(v) for v in variants if v}
+
+    best = (0, '')  # (score, desc)
+
+    def _tokenize(s_norm: str):
+        toks = [t for t in re.split(r'[^A-Z0-9]+', s_norm) if t and t not in {'DE', 'DEL', 'LA', 'EL', 'Y', 'EN', 'SR', 'JR'}]
+        return set(toks)
+
+    v_tokens = {_norm(v): _tokenize(_norm(v)) for v in variants if v}
+
     for torre_perfiles in perf_db.values():
         for p in torre_perfiles:
-            p_norm = _norm(p['rol'])
-            if p_norm == rol_norm:
-                return p['desc']
-            if not best_desc and (rol_norm in p_norm or p_norm in rol_norm):
-                best_desc = p['desc']
-    return best_desc
+            p_role = _clean_inline_text(p.get('rol'))
+            p_norm = _norm(p_role)
+
+            # Exacto
+            if p_norm in v_norms:
+                return p.get('desc', '')
+
+            # Substring fuerte
+            for vn in v_norms:
+                if vn and (vn in p_norm or p_norm in vn):
+                    # priorizar matches más largos
+                    score = 80 + min(19, int(20 * (min(len(vn), len(p_norm)) / max(len(vn), len(p_norm), 1))))
+                    if score > best[0]:
+                        best = (score, p.get('desc', ''))
+
+            # Similitud por tokens
+            p_toks = _tokenize(p_norm)
+            if not p_toks:
+                continue
+            for vn, vtoks in v_tokens.items():
+                if not vtoks:
+                    continue
+                inter = len(p_toks & vtoks)
+                if inter == 0:
+                    continue
+                union = len(p_toks | vtoks) or 1
+                j = inter / union
+                # ponderar por tokens compartidos, con umbral
+                if j >= 0.35 or inter >= 2:
+                    score = int(60 + j * 30 + min(10, inter * 2))
+                    if score > best[0]:
+                        best = (score, p.get('desc', ''))
+
+    return best[1]
 
 
 def _split_fda(cell_value):
     """Divide una celda de Excel en ítems FDA individuales usando '.' como separador."""
-    raw = str(cell_value).strip()
+    raw = _clean_inline_text(cell_value)
     parts = [p.strip() for p in raw.split('.')]
     return [p + '.' for p in parts if p]
 
@@ -679,58 +787,65 @@ def _edit_perfiles_slide(xml_bytes, perfiles):
             p = perfiles[i]
             role_name, desc_name = _PERFIL_SLOT_NAMES[i]
 
-            # Mapa de nombres dentro del grupo
+            # Mapa de nombres dentro del grupo.
+            # En algunas plantillas el "título" puede estar duplicado (stroke/shadow),
+            # y PowerPoint renderiza ambos, causando texto encimado. Por eso
+            # actualizamos TODAS las instancias del mismo name.
             inner_name_map = {}
             for sp in grpSp.iter(f'{{{P}}}sp'):
                 nvpr = sp.find(f'.//{{{P}}}cNvPr')
                 if nvpr is not None:
                     n = nvpr.attrib.get('name', '')
-                    if n not in inner_name_map:
-                        inner_name_map[n] = sp
+                    inner_name_map.setdefault(n, []).append(sp)
 
             # Escribir nombre del rol
-            sp_nombre = inner_name_map.get(role_name)
-            if sp_nombre is not None:
+            for sp_nombre in inner_name_map.get(role_name, []):
                 txb = sp_nombre.find(f'{{{P}}}txBody')
-                if txb is not None:
-                    all_t = txb.findall(f'.//{{{A}}}t')
-                    if all_t:
-                        all_t[0].text = p['rol']
-                        for t in all_t[1:]:
-                            t.text = ''
+                if txb is None:
+                    continue
+                all_t = txb.findall(f'.//{{{A}}}t')
+                if all_t:
+                    rol_text = _clean_inline_text(p.get('rol'))
+                    # Agregar "Desarrollador " si no lo tiene ya
+                    if rol_text and not rol_text.lower().startswith('desarrollador'):
+                        rol_text = 'Desarrollador ' + rol_text
+                    all_t[0].text = rol_text
+                    for t in all_t[1:]:
+                        t.text = ''
+                _normalize_bodyPr(txb)
 
             # Escribir descripción (máx 2 oraciones para no desbordar el cuadro)
-            sp_desc = inner_name_map.get(desc_name)
-            if sp_desc is not None:
+            for sp_desc in inner_name_map.get(desc_name, []):
                 txb = sp_desc.find(f'{{{P}}}txBody')
-                if txb is not None:
-                    desc_bold = p.get('desc_bold', False)
-                    raw_desc  = (p['desc'] or '').strip()
-                    # No truncar el placeholder "no encontrado"
-                    desc_text = raw_desc if desc_bold else _truncate_to_sentences(raw_desc)
-                    lines = [l for l in desc_text.split('\n') if l.strip()] or ['']
-                    paras = txb.findall(f'{{{A}}}p')
-                    template_para = paras[0] if paras else None
-                    for para in paras:
-                        txb.remove(para)
-                    for line in lines:
-                        if template_para is not None:
-                            new_para = _build_para_from_template(template_para, line)
-                            if desc_bold:
-                                for r in new_para.findall(f'{{{A}}}r'):
-                                    rPr = r.find(f'{{{A}}}rPr')
-                                    if rPr is None:
-                                        rPr = etree.Element(f'{{{A}}}rPr')
-                                        r.insert(0, rPr)
-                                    rPr.set('b', '1')
-                            txb.append(new_para)
-                        else:
-                            bold_attr = ' b="1"' if desc_bold else ''
-                            p_xml = (f'<a:p xmlns:a="{A}"><a:r>'
-                                     f'<a:rPr{bold_attr}/>'
-                                     f'<a:t>{_esc(line)}</a:t></a:r></a:p>')
-                            txb.append(etree.fromstring(p_xml))
-                    _normalize_bodyPr(txb)
+                if txb is None:
+                    continue
+                desc_bold = p.get('desc_bold', False)
+                raw_desc  = _clean_inline_text(p.get('desc'))
+                # No truncar el placeholder "no encontrado"
+                desc_text = raw_desc if desc_bold else _truncate_to_sentences(raw_desc)
+                lines = [l for l in desc_text.split('\n') if l.strip()] or ['']
+                paras = txb.findall(f'{{{A}}}p')
+                template_para = paras[0] if paras else None
+                for para in paras:
+                    txb.remove(para)
+                for line in lines:
+                    if template_para is not None:
+                        new_para = _build_para_from_template(template_para, line)
+                        if desc_bold:
+                            for r in new_para.findall(f'{{{A}}}r'):
+                                rPr = r.find(f'{{{A}}}rPr')
+                                if rPr is None:
+                                    rPr = etree.Element(f'{{{A}}}rPr')
+                                    r.insert(0, rPr)
+                                rPr.set('b', '1')
+                        txb.append(new_para)
+                    else:
+                        bold_attr = ' b="1"' if desc_bold else ''
+                        p_xml = (f'<a:p xmlns:a="{A}"><a:r>'
+                                 f'<a:rPr{bold_attr}/>'
+                                 f'<a:t>{_esc(line)}</a:t></a:r></a:p>')
+                        txb.append(etree.fromstring(p_xml))
+                _normalize_bodyPr(txb)
         else:
             # Eliminar el grupo completo del spTree (evita tarjetas fantasma)
             spTree.remove(grpSp)
@@ -766,10 +881,25 @@ def _fill_qa_card(sp, lines):
     """
     Llena el CuadroTexto 32 con una lista de líneas de texto.
     Preserva el formato (bullets blancos, tamaño, fuente) del template.
+    Configura el texto como responsive para que se adapte bien a diferentes longitudes.
     """
     txb = sp.find(f'{{{P}}}txBody')
     if txb is None:
         return
+    
+    # Configurar responsividad del texto
+    bodyPr = txb.find(f'{{{A}}}bodyPr')
+    if bodyPr is None:
+        bodyPr = etree.SubElement(txb, f'{{{A}}}bodyPr')
+    bodyPr.set('wrap', 'square')  # Word wrap habilitado
+    # Eliminar settings anteriores de autofit
+    for tag in ('spAutoFit', 'noAutofit', 'normAutofit'):
+        el = bodyPr.find(f'{{{A}}}{tag}')
+        if el is not None:
+            bodyPr.remove(el)
+    # Usar spAutoFit para expandir el cuadro si hay muchos ítems
+    etree.SubElement(bodyPr, f'{{{A}}}spAutoFit')
+    
     paras = txb.findall(f'{{{A}}}p')
     template_para = paras[0] if paras else None
     for para in paras:
@@ -780,14 +910,6 @@ def _fill_qa_card(sp, lines):
         else:
             p_xml = (f'<a:p xmlns:a="{A}"><a:r><a:t>{_esc(line)}</a:t></a:r></a:p>')
             txb.append(etree.fromstring(p_xml))
-    # spAutoFit para que el cuadro se expanda si hay muchos ítems
-    bodyPr = txb.find(f'{{{A}}}bodyPr')
-    if bodyPr is not None:
-        for tag in ('spAutoFit', 'noAutofit', 'normAutofit'):
-            el = bodyPr.find(f'{{{A}}}{tag}')
-            if el is not None:
-                bodyPr.remove(el)
-        etree.SubElement(bodyPr, f'{{{A}}}spAutoFit')
 
 
 def _edit_fda_slide(xml_bytes, torres, fda_db, usar_genericos=True, incluir_qa=True, items_override=None):
@@ -1036,14 +1158,23 @@ def edit(pptx_bytes, config):
     elif excel_perfiles:
         # Buscar descripción en catálogo; si no hay match → placeholder bold
         base_perfiles = []
+        seen_roles = set()
         for p in excel_perfiles:
             if not p.get('perfil'):
                 continue
-            catalog_desc = _find_desc_in_catalog(p['perfil'], perf_db)
-            if catalog_desc:
-                base_perfiles.append({'rol': p['perfil'], 'desc': catalog_desc})
-            else:
-                base_perfiles.append({'rol': p['perfil'], 'desc': _NO_CATALOG_DESC, 'desc_bold': True})
+            for rol in _split_profile_titles(p.get('perfil')):
+                rol_clean = _clean_inline_text(rol)
+                if not rol_clean:
+                    continue
+                key = _norm(rol_clean)
+                if key in seen_roles:
+                    continue
+                seen_roles.add(key)
+                catalog_desc = _find_desc_in_catalog(rol_clean, perf_db)
+                if catalog_desc:
+                    base_perfiles.append({'rol': rol_clean, 'desc': catalog_desc})
+                else:
+                    base_perfiles.append({'rol': rol_clean, 'desc': _NO_CATALOG_DESC, 'desc_bold': True})
         perfiles = _complement_perfiles(base_perfiles, torres_activas, perf_db) if usar_genericos else base_perfiles
     else:
         # Sin datos en Anexos ni manual → catálogo completo por torre

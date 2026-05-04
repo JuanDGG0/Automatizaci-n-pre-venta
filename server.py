@@ -82,41 +82,65 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        if self.path != '/generate':
-            self._send_json({'ok': False, 'error': 'Ruta no encontrada'}, 404)
-            return
         try:
             length = int(self.headers.get('Content-Length', '0'))
             raw    = self.rfile.read(length).decode('utf-8')
-            config = json.loads(raw) if raw else {}
-            print(f'[REQUEST] filial={config.get("filial")}')
+            data   = json.loads(raw) if raw else {}
+            roles = data.get('roles', [])
 
-            out_dir = '/tmp/periferia_out'
-            Path(out_dir).mkdir(parents=True, exist_ok=True)
+            print("ROLES RECIBIDOS:", roles)
 
-            result = generate(config, out_dir)
+            if self.path == '/generate-cronograma':
+                from generators.cronograma_excel import generate_cronograma
 
-            files = []
-            for tipo, file_path in result.items():
-                p = Path(file_path)
-                if not p.exists():
-                    raise FileNotFoundError(f'Archivo no encontrado: {file_path}')
-                with open(p, 'rb') as f:
-                    b64 = base64.b64encode(f.read()).decode('utf-8')
-                files.append({
-                    'tipo': tipo,
-                    'name': p.name,
-                    'url':  'data:application/vnd.openxmlformats-officedocument.presentationml.presentation;base64,' + b64
-                })
+                print('[CRONOGRAMA] Generando...')
 
-            print(f'[OK] {len(files)} archivo(s)')
-            self._send_json({'ok': True, 'files': files})
+                xlsx_bytes = generate_cronograma(data)
+
+                response = {
+                    'ok': True,
+                    'file': base64.b64encode(xlsx_bytes).decode('utf-8'),
+                    'filename': 'Cronograma.xlsx'
+                }
+
+                self._send_json(response)
+                return
+
+            elif self.path == '/generate':
+                print(f'[REQUEST] filial={data.get("filial")}')
+
+                out_dir = '/tmp/periferia_out'
+                Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+                result = generate(data, out_dir)
+
+                files = []
+                for tipo, file_path in result.items():
+                    p = Path(file_path)
+
+                    if not p.exists():
+                        raise FileNotFoundError(f'Archivo no encontrado: {file_path}')
+
+                    with open(p, 'rb') as f:
+                        b64 = base64.b64encode(f.read()).decode('utf-8')
+
+                    files.append({
+                        'tipo': tipo,
+                        'name': p.name,
+                        'url': 'data:application/vnd.openxmlformats-officedocument.presentationml.presentation;base64,' + b64
+                    })
+
+                print(f'[OK] {len(files)} archivo(s)')
+                self._send_json({'ok': True, 'files': files})
+                return
+
+            else:
+                self._send_json({'ok': False, 'error': 'Ruta no encontrada'}, 404)
 
         except Exception as e:
             tb = traceback.format_exc()
             print(f'[ERROR] {e}\n{tb}')
             self._send_json({'ok': False, 'error': str(e)}, 500)
-
 
 if __name__ == '__main__':
     server = ThreadedHTTPServer(('0.0.0.0', 8090), Handler)
